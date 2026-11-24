@@ -257,7 +257,9 @@ async function connectTikTok() {
     conn = new TikTokLiveConnection(CFG.user, {
       signApiKey: CFG.signApiKey,
       processInitialData: false,          // keine alten Chat-Nachrichten nachspielen
-      enableExtendedGiftInfo: true,       // Diamantwerte der Gifts
+      // AUS: die Geschenkliste braucht beim Signatur-Server einen kostenpflichtigen Plan und
+      // ließ sonst die ganze Verbindung scheitern. Diamantwerte stecken ohnehin in jedem Gift-Event.
+      enableExtendedGiftInfo: false,
       fetchRoomInfoOnConnect: true,
     });
     attachHandlers(conn);
