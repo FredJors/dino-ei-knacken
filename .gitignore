@@ -1,0 +1,15 @@
+# Abhängigkeiten & Laufzeitdaten
+node_modules/
+bridge/logs/
+*.log
+
+# Geheimnisse / lokale Einstellungen
+.env
+bridge/.env
+
+# Lokale Werkzeug-Konfiguration
+.claude/
+
+# System
+.DS_Store
+Thumbs.db
