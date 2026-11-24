@@ -100,8 +100,8 @@ const CONFIG = {
     safeRight: 945,                       // rechts davon: TikTok-Buttons → nur Deko
     safeBottom: 1280,                     // unteres Drittel: Chat → nur Deko
     centerX: 480,                         // Mitte der sicheren Fläche
-    eggY: 785,                            // Ei-Mittelpunkt (leicht über der Bildmitte 960)
-    groundY: 1010,                        // Boden, auf dem das Ei im Nest liegt
+    groundY: 1110,                        // Boden, auf dem das Ei im Nest liegt → Ei-Mitte ≈ 925 (Bildmitte 960).
+                                          // Landschaft, Herde & Einblendungen verschieben sich automatisch mit.
   },
   timer: {                                 // Meteor-Countdown in Sekunden
     normal: 240, boss: 360, duel: 240,
@@ -150,6 +150,8 @@ const CONFIG = {
   milestones: [3, 5, 10, 25, 50, 100, 250],
 };
 const CONFIG_DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
+/* Verschiebung der Landschaft gegenüber dem ursprünglichen Entwurf (Boden bei y = 1010) */
+const LAND_DY = CONFIG.layout.groundY - 1010;
 
 /* ==========================================================================
    2. Utils
@@ -1205,7 +1207,7 @@ function helperFrame(hue, kind, i) {
 }
 
 const SPECIES_H = { trex: 250, triceratops: 180, stegosaurus: 185, brachiosaurus: 335, velociraptor: 170, ankylosaurus: 115, parasaurolophus: 260, spinosaurus: 255, pteranodon: 250, dilophosaurus: 225 };
-const HERD_BAND = { y0: 1170, y1: 1480, x0: 70, x1: 1010 };
+const HERD_BAND = { y0: 1170 + LAND_DY, y1: 1480 + LAND_DY * 0.8, x0: 70, x1: 1010 };
 
 const SKY_KEYS = [   // [Phase, oben, unten, Nacht-Faktor]
   [0.00, '#5b62c4', '#ffb08a', 0.35],
@@ -1303,17 +1305,17 @@ const World = {
   init() {
     this.renderLayers();
     const r = mulberry32(42);
-    for (let i = 0; i < 150; i++) this.stars.push({ x: r() * 1080, y: r() * 820, s: 1 + r() * 2.6, p: r() * TAU, sp: 0.8 + r() * 2.5 });
+    for (let i = 0; i < 150; i++) this.stars.push({ x: r() * 1080, y: r() * (820 + LAND_DY), s: 1 + r() * 2.6, p: r() * TAU, sp: 0.8 + r() * 2.5 });
     for (let i = 0; i < 6; i++) this.clouds.push(this.makeCloud(r() * 1300 - 100, true));
     for (let i = 0; i < 46; i++) {
-      const y = 1040 + Math.pow(r(), 0.8) * 860;
+      const y = 1040 + LAND_DY + Math.pow(r(), 0.8) * (860 - LAND_DY);
       this.grass.push({ x: r() * 1080, y, h: 18 + (y - 1000) / 900 * 34 + r() * 10, n: 3 + Math.floor(r() * 3), p: r() * TAU, c: r() < 0.5 ? '#4f9f3f' : '#62b84a' });
     }
     this.grass.sort((a, b) => a.y - b.y);
     // Farne: [x, y, Größe, Anzahl Wedel, Grundwinkel-Streuung]
     this.ferns = [
       [-10, 1930, 1.25, 7], [140, 1955, 0.95, 6], [1090, 1930, 1.3, 7], [950, 1960, 0.9, 6],
-      [40, 1090, 0.55, 6], [1040, 1075, 0.6, 6], [-20, 1450, 0.8, 6], [1100, 1480, 0.85, 6],
+      [40, 1090 + LAND_DY, 0.55, 6], [1040, 1075 + LAND_DY, 0.6, 6], [-20, 1450 + LAND_DY / 2, 0.8, 6], [1100, 1480 + LAND_DY / 2, 0.85, 6],
     ].map(([x, y, s, n], i) => ({ x, y, s, n, p: i * 1.7 }));
     this.nextEventAt = rand(CONFIG.miniEvents.minSec, CONFIG.miniEvents.maxSec);
   },
@@ -1407,11 +1409,11 @@ const World = {
     this._smokeT = (this._smokeT || 0) - dt;
     if (this._smokeT <= 0) {
       this._smokeT = this.eruption > 0 ? 0.08 : 0.45;
-      FX.spawn({ type: 'blob', layer: 0, x: 835 + rand(-12, 12), y: 790, vx: rand(4, 16), vy: rand(-38, -24) * (this.eruption > 0 ? 2 : 1), size: rand(16, 26), grow: 9, life: rand(5, 7), alpha: this.eruption > 0 ? 0.75 : 0.5, color: this.eruption > 0 ? '#7b6f88' : '#c9c1d6', fadeIn: 0.6 });
+      FX.spawn({ type: 'blob', layer: 0, x: 835 + rand(-12, 12), y: 790 + LAND_DY, vx: rand(4, 16), vy: rand(-38, -24) * (this.eruption > 0 ? 2 : 1), size: rand(16, 26), grow: 9, life: rand(5, 7), alpha: this.eruption > 0 ? 0.75 : 0.5, color: this.eruption > 0 ? '#7b6f88' : '#c9c1d6', fadeIn: 0.6 });
     }
     if (this.eruption > 0) {
       this.eruption -= dt;
-      if (Math.random() < dt * 22) FX.spawn({ type: 'spark', layer: 0, x: 835 + rand(-15, 15), y: 795, vx: rand(-120, 120), vy: rand(-380, -220), g: 420, size: rand(5, 9), life: rand(1.2, 1.8), color: pick(['#ff7a2f', '#ffb13d', '#ff4d2e']) });
+      if (Math.random() < dt * 22) FX.spawn({ type: 'spark', layer: 0, x: 835 + rand(-15, 15), y: 795 + LAND_DY, vx: rand(-120, 120), vy: rand(-380, -220), g: 420, size: rand(5, 9), life: rand(1.2, 1.8), color: pick(['#ff7a2f', '#ffb13d', '#ff4d2e']) });
     }
     if (this.t > this.nextEruptAt) { this.nextEruptAt = this.t + rand(150, 260); this.erupt(); }
     // Flugsaurier im Hintergrund
@@ -1472,9 +1474,9 @@ const World = {
   /* --- Zeichnen --- */
   drawSky(ctx) {
     const sky = this.skyAt(this.dayPhase); this.night = sky.night;
-    const grd = ctx.createLinearGradient(0, 0, 0, 1050);
+    const grd = ctx.createLinearGradient(0, 0, 0, 1050 + LAND_DY);
     grd.addColorStop(0, rgbStr(sky.top)); grd.addColorStop(1, rgbStr(sky.bot));
-    ctx.fillStyle = grd; ctx.fillRect(0, 0, 1080, 1060);
+    ctx.fillStyle = grd; ctx.fillRect(0, 0, 1080, 1060 + LAND_DY);
     if (this.night > 0.05) {
       ctx.fillStyle = '#ffffff';
       for (const s of this.stars) { ctx.globalAlpha = this.night * (0.55 + 0.45 * Math.sin(this.t * s.sp + s.p)) * (1 - this.rain * 0.8); ctx.fillRect(s.x, s.y, s.s, s.s); }
@@ -1493,7 +1495,7 @@ const World = {
     }
     for (const c of this.clouds) { ctx.globalAlpha = c.a * (1 - this.night * 0.45); ctx.drawImage(c.img, c.x, c.y); }
     ctx.globalAlpha = 1;
-    if (this.rain > 0.02) { ctx.fillStyle = `rgba(70,80,110,${this.rain * 0.35})`; ctx.fillRect(0, 0, 1080, 1060); }
+    if (this.rain > 0.02) { ctx.fillStyle = `rgba(70,80,110,${this.rain * 0.35})`; ctx.fillRect(0, 0, 1080, 1060 + LAND_DY); }
   },
   _body(ctx, x, y, c1, c2, r, moon) {
     const glow = softBlob(moon ? '#c9c4ff' : '#ffe98a');
@@ -1505,19 +1507,19 @@ const World = {
   drawLand(ctx) {
     for (const f of this.flyers) this._flyer(ctx, f);
     FX.draw(ctx, 0);                                     // Rauch & Lava hinter den Bergen? – vor den Bergen wirkt lebendiger
-    ctx.drawImage(this.layerLand, 0, 740);
+    ctx.drawImage(this.layerLand, 0, 740 + LAND_DY);
     // Vulkan-Glühen
     const gl = 0.35 + Math.sin(this.t * 2) * 0.08 + (this.eruption > 0 ? 0.6 : 0);
     ctx.globalAlpha = clamp(gl, 0, 1); ctx.globalCompositeOperation = 'lighter';
-    ctx.drawImage(softBlob('#ff7a2f'), 835 - 70, 800 - 50, 140, 100);
+    ctx.drawImage(softBlob('#ff7a2f'), 835 - 70, 750 + LAND_DY, 140, 100);
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     if (this.rainbow > 0.02) this._rainbow(ctx);
-    ctx.drawImage(this.layerGround, 0, 990);
+    ctx.drawImage(this.layerGround, 0, 990 + LAND_DY);
   },
   _rainbow(ctx) {
     const cols = ['#ff5a5a', '#ff9d3d', '#ffe14d', '#6ee06e', '#4aa6ff', '#9b6bff'];
     ctx.save(); ctx.globalAlpha = this.rainbow * 0.5; ctx.lineWidth = 18;
-    cols.forEach((c, i) => { ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(480, 1060, 560 - i * 18, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke(); });
+    cols.forEach((c, i) => { ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(480, 1060 + LAND_DY, 560 - i * 18, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke(); });
     ctx.restore();
   },
   _flyer(ctx, f) {
@@ -1724,7 +1726,7 @@ class Helper {
   constructor(u) {
     this.uid = u.id; this.name = u.name; this.hue = u.hue;
     this.fromLeft = Math.random() < 0.5;
-    this.x = this.fromLeft ? -60 : 1140; this.y = 1060; this.tx = this.x; this.ty = this.y; this.scale = 1;
+    this.x = this.fromLeft ? -60 : 1140; this.y = CONFIG.layout.groundY + 50; this.tx = this.x; this.ty = this.y; this.scale = 1;
     this.state = 'walk'; this.t = rand(0, 10); this.walk = 1; this.face = this.fromLeft ? 1 : -1;
     this.peckT = 0; this.hop = 0; this.vh = 0; this.cheerT = 0; this.lastAct = gnow(); this.tagUntil = now() + CONFIG.helpers.tagSec + 2;
     this.slot = null; this.dead = false; this.blinkT = rand(1, 5); this.blink = 0; this.joinedAt = gnow();
@@ -1921,7 +1923,7 @@ const Game = {
   },
   /* Plätze rund um das Ei/die Eier verteilen */
   helperSlots() {
-    const xs = this.eggXs(this.mode), gy = CONFIG.layout.groundY, rows = [[-4, 0.9], [36, 1], [76, 1.08], [116, 1.14]];
+    const xs = this.eggXs(this.mode), gy = CONFIG.layout.groundY, rows = [[-4, 0.9], [30, 1], [64, 1.06], [98, 1.12]];
     const make = (ex, rx, team, innerSide, innerMax) => {
       const out = [];
       rows.forEach(([dy, sc], r) => {
@@ -1938,7 +1940,7 @@ const Game = {
     };
     if (this.mode === 'duel') { const rx = EGG_SIZES.duel[0]; return { 1: make(xs[0], rx, 1, 1, 1), 2: make(xs[1], rx, 2, -1, 1) }; }
     const rx = (EGG_SIZES[this.mode] || EGG_SIZES.normal)[0];
-    return { 0: make(xs[0], rx, 0, 0, 6).filter(s => s.y < gy + 100) };
+    return { 0: make(xs[0], rx, 0, 0, 6).filter(s => s.y < gy + 80) };
   },
   layoutHelpers() {
     const slots = this.helperSlots();
@@ -1949,7 +1951,7 @@ const Game = {
       if (this.mode === 'duel') { const u = Users.map.get(h.uid); team = u && u.team ? u.team : 1; }
       const list = slots[team] || [];
       const s = list[used[team]++];
-      if (s) h.setSlot(s); else { h.setSlot({ x: h.fromLeft ? -50 : 1130, y: 1060, scale: 1 }); }
+      if (s) h.setSlot(s); else { h.setSlot({ x: h.fromLeft ? -50 : 1130, y: CONFIG.layout.groundY + 50, scale: 1 }); }
     }
   },
   /* Treffer auf ein Ei */
@@ -2008,7 +2010,7 @@ const Game = {
     if (u.muted) return;
     const egg = this.eggs.find(e => e.team === team);
     const x = egg ? egg.x : this.eggXs('duel')[team - 1];
-    const y = egg ? egg.cy + rand(-30, 50) : 860;
+    const y = egg ? egg.cy + rand(-30, 50) : CONFIG.layout.groundY - 150;
     if (this.pops.length < CONFIG.pops.max + 4) this.pops.push({ text: `${u.name} → ${team}`, x: x + rand(-50, 50), y, t: 0, life: 1.6, color: team === 1 ? '#ffb08a' : '#9fe0ff', size: 30 });
   },
   greet(u) {
@@ -2179,7 +2181,12 @@ const Game = {
     // Toasts
     for (const t of this.toasts) t.t += rdt;
     this.toasts = this.toasts.filter(t => t.t < t.life);
-    while (this.toasts.length < 2 && this.toastQueue.length) { const t = this.toastQueue.shift(); t.t = 0; this.toasts.push(t); if (t.prio >= 2) Sound.chime(t.prio >= 3); }
+    // eine Einblendung zur Zeit (feste Spur über dem Chat); bei Andrang kürzer anzeigen
+    while (this.toasts.length < 1 && this.toastQueue.length) {
+      const t = this.toastQueue.shift(); t.t = 0;
+      if (this.toastQueue.length >= 3) t.life = Math.min(t.life, 2.0); else if (this.toastQueue.length >= 1) t.life = Math.min(t.life, 2.6);
+      this.toasts.push(t); if (t.prio >= 2) Sound.chime(t.prio >= 3);
+    }
     // Effekte abklingen
     this.shake = Math.max(0, this.shake - rdt * 1.6);
     this.flash = Math.max(0, this.flash - rdt * 1.8);
@@ -2453,6 +2460,11 @@ const HUD = {
 
   /* ---------- Info-Banner "So geht's" alle ~45 s ---------- */
   drawInfo(ctx, t) {
+    if (Game.phase === 'reveal') {                      // nicht hinter der Schlüpf-Karte hervorlugen → danach zeigen
+      if (t > this.infoNext - 1) this.infoNext = t + 1;
+      if (t - this.infoStart < CONFIG.infoBanner.showSec) this.infoStart = -99;
+      return;
+    }
     if (t > this.infoNext) { this.infoStart = t; this.infoNext = t + CONFIG.infoBanner.everySec; }
     const k = t - this.infoStart, dur = CONFIG.infoBanner.showSec;
     if (k < 0 || k > dur) return;
@@ -2478,7 +2490,7 @@ const HUD = {
       const sig = kind + rows.map(r => r.name + Math.round(r.pts)).join('|');
       if (sig !== this.board.sig) { this.board.sig = sig; this.board.img = this.renderBoard(titles[kind], rows); }
     }
-    ctx.drawImage(this.board.img, 20, 610);
+    ctx.drawImage(this.board.img, 20, 610 + LAND_DY / 2);
   },
   renderBoard(title, rows) {
     const c = document.createElement('canvas'); c.width = 290; c.height = 330; const g = c.getContext('2d');
@@ -2510,7 +2522,7 @@ const HUD = {
       const e = Game.eggs.find(e => e.team === team);
       if (e && e.state === 'roll') return;
       const x = e ? e.x : xs[i], col = team === 1 ? '#ff8a5c' : '#5cc8ff';
-      const y = 622 + Math.sin(t * 3 + i) * 4;
+      const y = CONFIG.layout.groundY - 388 + Math.sin(t * 3 + i) * 4;
       ctx.beginPath(); ctx.arc(x, y, 44, 0, TAU); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 7; ctx.strokeStyle = OUTLINE; ctx.stroke();
       drawText(ctx, String(team), x, y + 3, { size: 62, strokeWidth: 9 });
       drawText(ctx, `${this._teams[team]} im Team`, x + (i ? 1 : -1) * 0, y + 62, { size: 24, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 6 });
@@ -2529,9 +2541,9 @@ const HUD = {
 
   /* ---------- Einblendungen (Follow-Dank, Begrüßung, Meilensteine) ---------- */
   drawToasts(ctx) {
-    let y = 1192;
-    const list = Game.phase === 'reveal' ? Game.toasts.slice(0, 1) : Game.toasts;   // Karte nicht verdecken
-    for (const tt of list) {
+    // Spur direkt über dem unteren Drittel (Chat), unter Ei & Helfern
+    let y = Math.min(CONFIG.layout.safeBottom - 36, CONFIG.layout.groundY + 136);
+    for (const tt of Game.toasts) {
       const inK = clamp(tt.t / 0.3, 0, 1), outK = clamp((tt.life - tt.t) / 0.35, 0, 1);
       const text = (tt.icon ? tt.icon + ' ' : '') + tt.text;
       const size = tt.prio >= 3 ? 38 : 34;
@@ -2552,7 +2564,7 @@ const HUD = {
     const cx = CONFIG.layout.centerX;
     ctx.save(); ctx.globalAlpha = vis;
     if (a.mode === 'boss') {
-      const bandY = 560, bandH = 330;
+      const bandY = 560 + LAND_DY, bandH = 330;
       ctx.fillStyle = 'rgba(40,10,60,0.72)'; ctx.fillRect(0, bandY, 1080, bandH);
       ctx.fillStyle = '#b86bff'; ctx.fillRect(0, bandY, 1080, 10); ctx.fillRect(0, bandY + bandH - 10, 1080, 10);
       const pulse = 1 + Math.sin(t * 6) * 0.04;
@@ -2562,14 +2574,14 @@ const HUD = {
       else { const n = Math.ceil(left); const f = left - Math.floor(left); ctx.save(); ctx.translate(cx, bandY + 200); const sc = 1 + (f) * 0.6; ctx.scale(sc, sc); drawText(ctx, String(n), 0, 0, { size: 120, color: '#ff5f5f', strokeWidth: 16 }); ctx.restore(); }
       drawText(ctx, 'Kommentiere jetzt – hol dir deinen Helfer!', cx, bandY + 286, { size: 38, maxWidth: 880, strokeWidth: 8 });
     } else if (a.mode === 'duel') {
-      const bandY = 590, bandH = 270;
+      const bandY = 590 + LAND_DY, bandH = 270;
       ctx.fillStyle = 'rgba(20,20,50,0.7)'; ctx.fillRect(0, bandY, 1080, bandH);
       ctx.fillStyle = '#ff8a5c'; ctx.fillRect(0, bandY, 540, 10); ctx.fillStyle = '#5cc8ff'; ctx.fillRect(540, bandY, 540, 10);
       ctx.save(); ctx.translate(cx, bandY + 90); const s = easeOutBack(inK); ctx.scale(s, s);
       drawText(ctx, '⚔️ EI-DUELL!', 0, 0, { size: 116, color: '#ffe14d', strokeWidth: 15 }); ctx.restore();
       drawText(ctx, 'Schreib 1 oder 2 für dein Team!', cx, bandY + 196, { size: 52, maxWidth: 880, strokeWidth: 10 });
     } else {
-      const bandY = 640, bandH = 220;
+      const bandY = 640 + LAND_DY, bandH = 220;
       ctx.fillStyle = 'rgba(43,29,58,0.6)'; ctx.fillRect(0, bandY, 1080, bandH);
       ctx.save(); ctx.translate(cx, bandY + 84); const s = easeOutBack(inK); ctx.scale(s, s);
       drawText(ctx, `EI #${Game.eggNumber}`, 0, 0, { size: 116, color: '#ffe14d', strokeWidth: 15 }); ctx.restore();
@@ -2583,7 +2595,7 @@ const HUD = {
     const info = Game.hatchInfo; if (!info || Game.phase !== 'reveal') return;
     const k = Game.phaseT, dur = CONFIG.reveal.cardSec;
     const inK = easeOutBack(clamp(k / 0.45, 0, 1)), outK = clamp((dur - k) / 0.35, 0, 1);
-    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 775, W = 850, H = 640;
+    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 775 + LAND_DY / 2, W = 850, H = 640;
     ctx.save(); ctx.globalAlpha = outK; ctx.translate(cx, cy); ctx.scale(inK, inK);
     // Strahlen hinter der Karte
     ctx.save(); ctx.rotate(t * 0.4); ctx.fillStyle = R.glow ? R.glow : 'rgba(255,255,255,0.6)'; ctx.globalAlpha *= R.glow ? 0.45 : 0.25;
@@ -2623,11 +2635,11 @@ const HUD = {
     if (Game.phase !== 'impact' || Game.phaseT < 1.0) return;
     const k = Game.phaseT - 1.0, cx = CONFIG.layout.centerX, out = clamp((5.2 - Game.phaseT) / 0.4, 0, 1);
     ctx.save(); ctx.globalAlpha = out;
-    ctx.save(); ctx.translate(cx, 640); const s = easeOutBack(clamp(k / 0.4, 0, 1)) * (1 + Math.sin(t * 8) * 0.02); ctx.scale(s, s);
+    ctx.save(); ctx.translate(cx, 640 + LAND_DY); const s = easeOutBack(clamp(k / 0.4, 0, 1)) * (1 + Math.sin(t * 8) * 0.02); ctx.scale(s, s);
     drawText(ctx, 'BUMM!', 0, 0, { size: 160, color: '#ff8a3d', strokeWidth: 18 }); ctx.restore();
-    if (k > 0.4) drawText(ctx, 'Der Meteor war schneller!', cx, 770, { size: 56, maxWidth: 880, strokeWidth: 10, alpha: clamp((k - 0.4) / 0.3, 0, 1) });
-    if (k > 0.9 && Game.impactInfo) drawText(ctx, `Ihr hattet ${Math.floor(Game.impactInfo.progress * 100)} % geschafft!`, cx, 850, { size: 48, maxWidth: 880, color: '#ffe680', strokeWidth: 9, alpha: clamp((k - 0.9) / 0.3, 0, 1) });
-    if (k > 1.5) drawText(ctx, 'Das nächste Ei ist weicher! 💪', cx, 925, { size: 40, maxWidth: 880, strokeWidth: 8, alpha: clamp((k - 1.5) / 0.3, 0, 1) });
+    if (k > 0.4) drawText(ctx, 'Der Meteor war schneller!', cx, 770 + LAND_DY, { size: 56, maxWidth: 880, strokeWidth: 10, alpha: clamp((k - 0.4) / 0.3, 0, 1) });
+    if (k > 0.9 && Game.impactInfo) drawText(ctx, `Ihr hattet ${Math.floor(Game.impactInfo.progress * 100)} % geschafft!`, cx, 850 + LAND_DY, { size: 48, maxWidth: 880, color: '#ffe680', strokeWidth: 9, alpha: clamp((k - 0.9) / 0.3, 0, 1) });
+    if (k > 1.5) drawText(ctx, 'Das nächste Ei ist weicher! 💪', cx, 925 + LAND_DY, { size: 40, maxWidth: 880, strokeWidth: 8, alpha: clamp((k - 1.5) / 0.3, 0, 1) });
     ctx.restore();
   },
 
@@ -2665,7 +2677,7 @@ const HUD = {
     World.drawSky(ctx);
     if (Game.phase === 'play' && Game.timeLeft < CONFIG.timer.urgentAt) {
       const u = clamp((CONFIG.timer.urgentAt - Game.timeLeft) / CONFIG.timer.urgentAt, 0, 1);
-      ctx.fillStyle = `rgba(255,70,40,${u * (0.12 + Math.sin(t * 5) * 0.05)})`; ctx.fillRect(0, 0, 1080, 1060);
+      ctx.fillStyle = `rgba(255,70,40,${u * (0.12 + Math.sin(t * 5) * 0.05)})`; ctx.fillRect(0, 0, 1080, 1060 + LAND_DY);
     }
     if (Game.meteor && Game.meteor.state !== 'dive') World.drawMeteor(ctx, Game.meteor);
     World.drawLand(ctx);
