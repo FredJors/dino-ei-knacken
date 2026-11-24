@@ -247,6 +247,18 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 - **Stummschalten:** Panel → „Zuletzt aktiv“ → „Stumm“. Stumme Nutzer zählen weiter, werden aber nirgends angezeigt
   (kein Helfer, kein Pop, nicht in Bestenlisten; benennen sie einen Dino, heißt er „Anonymer Knacker“).
 
+### Profilbilder
+
+- Erscheinen in der **Top-5-Bestenliste**, auf der **Schlüpf-Karte** (Namensgeber) und in **Dank/Begrüßungen**.
+- Kommen über die Bridge (`http://localhost:8787/avatar/…`): sie lädt das Bild einmal von TikTok und hält es im Speicher.
+  Darum gibt es Bilder nur, wenn das Spiel über `http://localhost:8787/` läuft. Ohne Bild erscheint ein farbiger
+  Kreis mit dem Anfangsbuchstaben, im Testmodus ein erzeugtes Platzhalter-Gesicht.
+- ⚠️ **Bilder werden nicht automatisch geprüft.** Schutz:
+  - Panel → Einstellungen → Anzeige → **„Profilbilder anzeigen“** schaltet alle Bilder ab.
+  - Panel → „Zuletzt aktiv“ → **„Bild aus“** blendet nur das Bild dieser Person aus (Name bleibt, wird gespeichert).
+  - Stummgeschaltete und vom Namensfilter erwischte Nutzer bekommen nie ein Bild.
+- Dinos in der Herde aus früheren Streams zeigen nur den Namen (TikTok-Bildlinks laufen ab).
+
 ---
 
 ## Daten, Speicherstand & Statistik
@@ -278,6 +290,7 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 | Fenster minimiert → Spiel steht | Browser pausieren unsichtbare Fenster. Spiel-Fenster sichtbar lassen (darf hinter anderen liegen, nicht minimieren). |
 | iPad: Bridge verbindet nicht | Erwartet – Safari blockiert `ws://` von der https-Seite. Die Bridge ist für den PC gedacht. |
 | Spielstand weg | Anderer Browser/andere Adresse = anderer Speicher. Panel → Export/Import nutzen. |
+| Keine Profilbilder, nur Buchstaben | Spiel über `http://localhost:8787/` öffnen (nicht GitHub Pages/Datei), Bridge muss laufen, „Profilbilder anzeigen“ im Panel an? Manche Nutzer haben kein Bild – dann bleibt der Buchstabe. |
 | TikTok hat etwas geändert | `cd bridge`, dann `npm update tiktok-live-connector`, Bridge neu starten, Log in `bridge/logs/` ansehen. |
 
 ---

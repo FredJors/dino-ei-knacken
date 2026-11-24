@@ -63,7 +63,11 @@ const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      return res.end(JSON.stringify({ ok: true, tiktok, clients: clientCount(), demo: CFG.demo }));
+      return res.end(JSON.stringify({ ok: true, tiktok, clients: clientCount(), demo: CFG.demo, avatars: { known: avatarUrls.size, cached: avatarCache.size } }));
+    }
+    if (url.pathname.startsWith('/avatar/') && req.method === 'GET') {
+      let uid = ''; try { uid = decodeURIComponent(url.pathname.slice(8)).slice(0, 64); } catch { /* ungültig */ }
+      return void serveAvatar(uid, res);
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
     let rel = decodeURIComponent(url.pathname);
@@ -80,6 +84,75 @@ const server = http.createServer((req, res) => {
     try { res.writeHead(400); res.end(); } catch { /* egal */ }
   }
 });
+
+/* --------------------------- Profilbilder ------------------------------ */
+// TikTok liefert pro Event Bild-Links des Nutzers. Die Links laufen ab und laden nicht
+// immer direkt im Browser → die Bridge lädt das Bild selbst, hält es im Speicher und
+// liefert es unter /avatar/<uid> aus. Es werden NUR Links aus TikTok-Events geladen.
+const avatarUrls = new Map();    // uid → [https-Links]
+const avatarCache = new Map();   // uid → { buf, type } oder { failAt }
+const avatarPending = new Map(); // uid → Promise (doppelte Downloads vermeiden)
+const AVATAR_MAX_BYTES = 600 * 1024;
+
+function rememberAvatar(uid, user) {
+  const pic = user && (user.avatarThumb || user.avatarMedium || user.profilePicture || user.avatarLarge);
+  const list = pic && (pic.urlList || pic.url || pic.mUrls || pic.urls);
+  const urls = (Array.isArray(list) ? list : []).filter(u => typeof u === 'string' && u.startsWith('https://')).slice(0, 4);
+  if (!urls.length) return avatarUrls.has(uid);
+  avatarUrls.delete(uid); avatarUrls.set(uid, urls);            // neuester Eintrag hinten (LRU)
+  if (avatarUrls.size > 5000) avatarUrls.delete(avatarUrls.keys().next().value);
+  return true;
+}
+
+function demoAvatarSvg(uid) {
+  let h = 0; for (const ch of uid) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const hue = h % 360, hair = (hue + 140) % 360;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">` +
+    `<rect width="96" height="96" fill="hsl(${hue},70%,72%)"/><circle cx="48" cy="104" r="40" fill="hsl(${hue},45%,40%)"/>` +
+    `<circle cx="48" cy="46" r="22" fill="#f6d2b4"/><path d="M26 44 Q48 10 70 44 Q60 30 48 30 Q36 30 26 44Z" fill="hsl(${hair},55%,35%)"/>` +
+    `<circle cx="40" cy="47" r="3" fill="#2b1d3a"/><circle cx="56" cy="47" r="3" fill="#2b1d3a"/>` +
+    `<path d="M40 56 Q48 62 56 56" stroke="#2b1d3a" stroke-width="3" fill="none" stroke-linecap="round"/></svg>`;
+}
+
+async function fetchAvatar(uid) {
+  for (const link of avatarUrls.get(uid) || []) {
+    try {
+      const r = await fetch(link, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', Referer: 'https://www.tiktok.com/' }, signal: AbortSignal.timeout(6000) });
+      const type = r.headers.get('content-type') || '';
+      if (!r.ok || !type.startsWith('image/')) continue;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!buf.length || buf.length > AVATAR_MAX_BYTES) continue;
+      return { buf, type };
+    } catch { /* nächster Link */ }
+  }
+  return null;
+}
+
+async function serveAvatar(uid, res) {
+  const head = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' };
+  const notFound = () => { res.writeHead(404, { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }); res.end(); };
+  try {
+    if (!uid) return notFound();
+    if (CFG.demo && uid.startsWith('demo')) { res.writeHead(200, { ...head, 'Content-Type': 'image/svg+xml' }); return res.end(demoAvatarSvg(uid)); }
+    let c = avatarCache.get(uid);
+    if (c && c.failAt && Date.now() - c.failAt > 5 * 60000) { avatarCache.delete(uid); c = null; }   // nach 5 min neu versuchen
+    if (!c) {
+      if (!avatarUrls.has(uid)) return notFound();
+      let p = avatarPending.get(uid);
+      if (!p) { p = fetchAvatar(uid).finally(() => avatarPending.delete(uid)); avatarPending.set(uid, p); }
+      const got = await p;
+      c = got || { failAt: Date.now() };
+      avatarCache.set(uid, c);
+      if (avatarCache.size > 600) avatarCache.delete(avatarCache.keys().next().value);
+    }
+    if (!c.buf) return notFound();
+    res.writeHead(200, { ...head, 'Content-Type': c.type });
+    res.end(c.buf);
+  } catch (err) {
+    log('WARN', 'Profilbild-Fehler:', err.message);
+    try { notFound(); } catch { /* egal */ }
+  }
+}
 
 /* ------------------------- WebSocket-Server ---------------------------- */
 // Nur lokale Seiten, file:// und GitHub Pages dürfen sich verbinden (Schutz vor fremden Webseiten).
@@ -144,7 +217,8 @@ function forward(type, d, extra = {}) {
   const u = userOf(d);
   if (!u.uid) return;
   eventCount++;
-  broadcast({ type: 'event', event: { type, ...u, ...extra } });
+  const avatar = rememberAvatar(u.uid, d && d.user) ? 1 : 0;   // Spiel lädt Bild bei Bedarf über /avatar/<uid>
+  broadcast({ type: 'event', event: { type, ...u, avatar, ...extra } });
 }
 
 /* ------------------------ TikTok-Verbindung ---------------------------- */
@@ -266,7 +340,7 @@ function startDemo() {
     const n = Math.random() < CFG.demoRate % 1 ? Math.ceil(CFG.demoRate) : Math.floor(CFG.demoRate);
     for (let i = 0; i < n; i++) {
       const k = Math.floor(Math.random() * names.length), r = Math.random();
-      const base = { uid: 'demo' + k, name: names[k], nick: names[k] };
+      const base = { uid: 'demo' + k, name: names[k], nick: names[k], avatar: k % 4 === 3 ? 0 : 1 };   // jeder 4. ohne Bild (Fallback testen)
       const ev = r < 0.62 ? { type: 'chat', text: Math.random() < 0.2 ? String(1 + Math.floor(Math.random() * 2)) : 'hallo' }
         : r < 0.93 ? { type: 'like', count: 1 + Math.floor(Math.random() * 15) }
         : r < 0.96 ? { type: 'share' } : r < 0.985 ? { type: 'follow' } : { type: 'gift', diamonds: [1, 5, 10, 99][Math.floor(Math.random() * 4)] };

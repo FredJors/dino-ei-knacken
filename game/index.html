@@ -142,6 +142,7 @@ const CONFIG = {
   miniEvents: { minSec: 60, maxSec: 120 },
   audio: { master: 0.55, sfx: 0.7, music: 0.35, musicEnabled: true },
   names: { maxLen: 16, useNickname: false, anonymous: 'Anonymer Knacker' },
+  avatars: { enabled: true },             // Profilbilder in Bestenliste, Karte & Einblendungen (nur mit Bridge)
   filter: { extraWords: [] },
   bridge: { url: 'ws://localhost:8787', retryMinMs: 1500, retryMaxMs: 15000 },
   save: { everySec: 10, key: 'dinoEi.v1', settingsKey: 'dinoEi.settings.v1', logKey: 'dinoEi.logs.v1' },
@@ -1206,7 +1207,8 @@ function helperFrame(hue, kind, i) {
   });
 }
 
-const SPECIES_H = { trex: 250, triceratops: 180, stegosaurus: 185, brachiosaurus: 335, velociraptor: 170, ankylosaurus: 115, parasaurolophus: 260, spinosaurus: 255, pteranodon: 250, dilophosaurus: 225 };
+/* tatsächliche Höhe je Art in Dino-Einheiten (gemessen; für Karte & Namensschilder der Herde) */
+const SPECIES_H = { trex: 256, triceratops: 226, stegosaurus: 223, brachiosaurus: 357, velociraptor: 193, ankylosaurus: 140, parasaurolophus: 278, spinosaurus: 230, pteranodon: 241, dilophosaurus: 236 };
 const HERD_BAND = { y0: 1170 + LAND_DY, y1: 1480 + LAND_DY * 0.8, x0: 70, x1: 1010 };
 
 const SKY_KEYS = [   // [Phase, oben, unten, Nacht-Faktor]
@@ -1602,7 +1604,9 @@ const World = {
    ========================================================================== */
 const Persist = {
   muted: {},                                  // id → Name (für das Panel)
+  noPic: {},                                  // id → Name: Profilbild ausgeblendet (Name bleibt sichtbar)
   isMuted(id) { return Object.prototype.hasOwnProperty.call(this.muted, id); },
+  isNoPic(id) { return Object.prototype.hasOwnProperty.call(this.noPic, id); },
 };
 
 const Users = {
@@ -1617,6 +1621,7 @@ const Users = {
             lastHitAt: -1e9, greeted: false, likeBuf: 0, helper: null, hue: hashStr(String(ev.uid)) % 360, interactions: 0 };
       this.map.set(ev.uid, u);
     } else if (raw !== u.raw) { const c = NameFilter.clean(raw); u.raw = raw; u.name = c.name; u.filtered = c.filtered; }
+    if (ev.avatar) u.hasAvatar = true;          // Bridge kennt ein Profilbild → wird bei Bedarf geladen
     u.lastActive = gnow(); u.interactions++;
     return u;
   },
@@ -1638,6 +1643,72 @@ const Users = {
     Game.boardDirty = true;
   },
   recent(n = 30) { return [...this.map.values()].sort((a, b) => b.lastActive - a.lastActive).slice(0, n); },
+};
+
+/* --------------------------------------------------------------------------
+   Profilbilder: kommen über die Bridge (/avatar/<uid>, zwischengespeichert).
+   Schutz: nur wenn eingeschaltet, nie bei stummen/gefilterten Nutzern oder
+   bei "Bild aus" im Panel. Ohne Bild: farbiger Kreis mit Anfangsbuchstabe.
+   Im Testmodus gibt es erzeugte Platzhalter-Gesichter (für den Layout-Test).
+   -------------------------------------------------------------------------- */
+const Avatars = {
+  map: new Map(), fakes: new Map(),
+  allowed(u) { return !!(CONFIG.avatars.enabled && u && !u.muted && !u.filtered && !Persist.isNoPic(u.id)); },
+  base() {
+    try { const w = new URL(Net.url()); return (w.protocol === 'wss:' ? 'https:' : 'http:') + '//' + w.host; } catch (e) { return null; }
+  },
+  /* liefert ein zeichenbares Bild oder null */
+  get(u) {
+    if (!this.allowed(u)) return null;
+    if (u.hasAvatar && Net.state === 'connected') {
+      let e = this.map.get(u.id);
+      if (!e) e = this.load(u.id);
+      return e && e.state === 'ok' ? e.img : null;
+    }
+    if (Net.testMode && String(u.id).startsWith('sim')) return this.fake(u);
+    return null;
+  },
+  load(id) {
+    const base = this.base(); if (!base) return null;
+    if (this.map.size > 800) { let n = 0; for (const k of this.map.keys()) { this.map.delete(k); if (++n >= 200) break; } }
+    const img = new Image(), e = { img, state: 'loading' };
+    img.crossOrigin = 'anonymous';                 // Bridge sendet CORS-Header → Canvas bleibt sauber
+    img.onload = () => { e.state = 'ok'; Game.boardDirty = true; };
+    img.onerror = () => { e.state = 'fail'; };
+    img.src = base + '/avatar/' + encodeURIComponent(id);
+    this.map.set(id, e);
+    return e;
+  },
+  /* Platzhalter-Gesicht für simulierte Zuschauer */
+  fake(u) {
+    let c = this.fakes.get(u.id); if (c) return c;
+    c = document.createElement('canvas'); c.width = c.height = 96; const g = c.getContext('2d'), r = mulberry32(hashStr(String(u.id)));
+    const hue = Math.floor(r() * 360), skin = pick(['#f6d2b4', '#e8b48f', '#c98e64', '#8d5a3c', '#ffe0c8']);
+    g.fillStyle = hsl(hue, 70, 74); g.fillRect(0, 0, 96, 96);
+    g.fillStyle = hsl(hue, 45, 42); g.beginPath(); g.arc(48, 106, 42, 0, TAU); g.fill();
+    g.fillStyle = skin; g.beginPath(); g.arc(48, 46, 22, 0, TAU); g.fill();
+    g.fillStyle = hsl((hue + 150) % 360, 50, 32); g.beginPath(); g.moveTo(25, 46); g.quadraticCurveTo(48, 6 + r() * 10, 71, 46); g.quadraticCurveTo(60, 30, 48, 30); g.quadraticCurveTo(36, 30, 25, 46); g.fill();
+    g.fillStyle = OUTLINE; g.beginPath(); g.arc(40, 48, 3, 0, TAU); g.arc(56, 48, 3, 0, TAU); g.fill();
+    g.strokeStyle = OUTLINE; g.lineWidth = 3; g.lineCap = 'round'; g.beginPath(); g.moveTo(40, 57); g.quadraticCurveTo(48, 63, 56, 57); g.stroke();
+    this.fakes.set(u.id, c); return c;
+  },
+  /* runder Avatar; u kann null sein (→ "?") */
+  draw(ctx, u, x, y, r, ring = OUTLINE) {
+    const img = this.get(u);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU);
+    if (img) {
+      ctx.save(); ctx.clip(); ctx.drawImage(img, x - r, y - r, r * 2, r * 2); ctx.restore();
+    } else {
+      const ok = !!(u && !u.muted && !u.filtered);   // "Bild aus" → Buchstabe bleibt; stumm/gefiltert → "?"
+      ctx.fillStyle = ok ? hsl(u.hue != null ? u.hue : hashStr(String(u.id)) % 360, 65, 58) : '#8a84a8'; ctx.fill();
+      const letter = ok ? (Array.from(String(u.name || '').replace(/^[^\p{L}\p{N}]+/u, ''))[0] || '?').toUpperCase() : '?';
+      drawText(ctx, letter, x, y + r * 0.06, { size: Math.round(r * 1.15), strokeWidth: Math.max(3, r * 0.18), drop: false });
+    }
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.lineWidth = Math.max(3, r * 0.14); ctx.strokeStyle = ring; ctx.stroke();
+    ctx.restore();
+    return !!img;
+  },
 };
 
 /* Bestenlisten: heute & gesamt (persistiert), aktuelles Ei (aus Egg.contrib) */
@@ -2020,7 +2091,7 @@ const Game = {
   toast(text, o = {}) {
     if (o.u && o.u.muted) return;
     if (this.toastQueue.length > 8) { const i = this.toastQueue.findIndex(t => t.prio <= 1); if (i >= 0) this.toastQueue.splice(i, 1); else if ((o.prio || 1) <= 1) return; }
-    this.toastQueue.push({ text, color: o.color || '#ffffff', icon: o.icon || '', prio: o.prio || 1, t: 0, life: o.life || 3.2 });
+    this.toastQueue.push({ text, color: o.color || '#ffffff', icon: o.icon || '', prio: o.prio || 1, t: 0, life: o.life || 3.2, uid: o.u ? o.u.id : null });
     this.toastQueue.sort((a, b) => b.prio - a.prio);
   },
 
@@ -2051,7 +2122,7 @@ const Game = {
       for (const e of this.eggs) if (e !== egg) { e.state = 'roll'; e.rollDir = e.x < egg.x ? -1 : 1; }
     }
     const secs = Math.round(this.duration - this.timeLeft);
-    this.hatchInfo = { egg, rarity, species: sp.key, speciesName: sp.name, palIdx: randInt(0, pals.length - 1), seed: randInt(1, 1e6), name, top3, team, members, secs, x: egg.x, y: egg.groundY };
+    this.hatchInfo = { egg, rarity, species: sp.key, speciesName: sp.name, palIdx: randInt(0, pals.length - 1), seed: randInt(1, 1e6), name, namerId: last ? last.id : null, top3, team, members, secs, x: egg.x, y: egg.groundY };
     this.phase = 'hatch'; this.phaseT = 0;
     this.totals.hatches++; this.hatchTimes.push(secs); if (this.hatchTimes.length > 30) this.hatchTimes.shift();
     // Effekte
@@ -2131,8 +2202,8 @@ const Game = {
     // Begrüßungen bündeln
     if (this.greetBuf.length && now() - this.greetAt > 1.2) {
       this.greetAt = now();
-      if (this.greetBuf.length === 1) this.toast(`${this.greetBuf[0].name} ist dabei!`, { icon: '👋', prio: 1, life: 2.4 });
-      else this.toast(`${this.greetBuf[0].name} und ${this.greetBuf.length - 1} weitere sind dabei!`, { icon: '👋', prio: 1, life: 2.6 });
+      if (this.greetBuf.length === 1) this.toast(`${this.greetBuf[0].name} ist dabei!`, { icon: '👋', prio: 1, life: 2.4, u: this.greetBuf[0] });
+      else this.toast(`${this.greetBuf[0].name} und ${this.greetBuf.length - 1} weitere sind dabei!`, { icon: '👋', prio: 1, life: 2.6, u: this.greetBuf[0] });
       Sound.pop(); this.greetBuf = [];
     }
     // Aktivität der letzten ~5 s
@@ -2279,7 +2350,7 @@ Persist.snapshot = function () {
     v: 1, savedAt: Date.now(), eggNumber: Game.eggNumber, normalsSince: Game.normalsSince, specialIdx: Game.specialIdx, override: Game.override, softer: Game.softer,
     round, totals: Game.totals, hatchTimes: Game.hatchTimes, dayPhase: World.dayPhase,
     herd: World.herd.filter(h => !h.leaving).slice(-CONFIG.herd.maxVisible).map(h => h.toJSON()),
-    board: { today: Board.today, all: Board.all }, coll: { users: Coll.users, lexikon: Coll.lexikon, firsts: Coll.firsts }, muted: Persist.muted,
+    board: { today: Board.today, all: Board.all }, coll: { users: Coll.users, lexikon: Coll.lexikon, firsts: Coll.firsts }, muted: Persist.muted, noPic: Persist.noPic,
   };
 };
 Persist.save = function () { Board.prune(); return Store.set(CONFIG.save.key, Persist.snapshot()); };
@@ -2293,7 +2364,7 @@ Persist.apply = function (d) {
   World.herd = (d.herd || []).filter(h => h && SPECIES_BY_KEY[h.species] && PALETTES[h.rarity]).map(h => new HerdDino(h));
   if (d.board) { Board.today = d.board.today && d.board.today.date === todayStr() ? d.board.today : { date: todayStr(), map: {} }; Board.all = d.board.all || {}; }
   if (d.coll) { Coll.users = d.coll.users || {}; Coll.lexikon = d.coll.lexikon || {}; Coll.firsts = d.coll.firsts || {}; }
-  Persist.muted = d.muted || {};
+  Persist.muted = d.muted || {}; Persist.noPic = d.noPic || {};
   for (const u of Users.map.values()) u.muted = Persist.isMuted(u.id);
   HUD.lexDirty = true; Game.boardDirty = true;
   return d.round || null;
@@ -2487,7 +2558,7 @@ const HUD = {
     if (Game.boardDirty || !this.board.img || t - (this.board.at || 0) > 1) {
       Game.boardDirty = false; this.board.at = t;
       const rows = Board.top(kind, 5);
-      const sig = kind + rows.map(r => r.name + Math.round(r.pts)).join('|');
+      const sig = kind + (CONFIG.avatars.enabled ? 'A' : '') + rows.map(r => { const u = Users.map.get(r.id); return r.name + Math.round(r.pts) + (u && Avatars.get(u) ? '*' : ''); }).join('|');
       if (sig !== this.board.sig) { this.board.sig = sig; this.board.img = this.renderBoard(titles[kind], rows); }
     }
     ctx.drawImage(this.board.img, 20, 610 + LAND_DY / 2);
@@ -2500,10 +2571,18 @@ const HUD = {
     if (!rows.length) { drawText(g, 'Noch niemand –', 145, 160, { size: 24, strokeWidth: 5, drop: false }); drawText(g, 'schreib was!', 145, 194, { size: 24, strokeWidth: 5, drop: false }); return c; }
     const medals = ['#ffd23f', '#d6dbe6', '#e09a5a', '#a7b4ff', '#a7b4ff'];
     rows.forEach((r, i) => {
-      const y = 112 + i * 47;
-      g.beginPath(); g.arc(30, y, 16, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 3; g.strokeStyle = OUTLINE; g.stroke();
-      drawText(g, String(i + 1), 30, y + 1, { size: 20, color: OUTLINE, stroke: false });
-      drawText(g, r.name, 54, y, { size: 24, align: 'left', maxWidth: 160, strokeWidth: 5, drop: false });
+      const y = 112 + i * 47, u = Users.map.get(r.id);
+      if (CONFIG.avatars.enabled && u) {
+        // Profilbild (oder Buchstabe) mit Rang-Plakette
+        Avatars.draw(g, u, 30, y, 19, medals[i]);
+        g.beginPath(); g.arc(45, y + 13, 10, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 2.5; g.strokeStyle = OUTLINE; g.stroke();
+        drawText(g, String(i + 1), 45, y + 14, { size: 14, color: OUTLINE, stroke: false });
+      } else {
+        g.beginPath(); g.arc(30, y, 16, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 3; g.strokeStyle = OUTLINE; g.stroke();
+        drawText(g, String(i + 1), 30, y + 1, { size: 20, color: OUTLINE, stroke: false });
+      }
+      const nx = CONFIG.avatars.enabled && u ? 62 : 54;
+      drawText(g, r.name, nx, y, { size: 24, align: 'left', maxWidth: 214 - nx, strokeWidth: 5, drop: false });
       drawText(g, String(Math.max(1, Math.round(r.pts))), 272, y, { size: 24, align: 'right', color: '#ffe680', strokeWidth: 5, drop: false });
     });
     return c;
@@ -2547,10 +2626,13 @@ const HUD = {
       const inK = clamp(tt.t / 0.3, 0, 1), outK = clamp((tt.life - tt.t) / 0.35, 0, 1);
       const text = (tt.icon ? tt.icon + ' ' : '') + tt.text;
       const size = tt.prio >= 3 ? 38 : 34;
-      const w = Math.min(890, measureText(ctx, text, size) + 70);
+      const u = CONFIG.avatars.enabled && tt.uid != null ? Users.map.get(tt.uid) : null;
+      const av = u ? 58 : 0;                                   // Platz fürs Profilbild links
+      const w = Math.min(890, measureText(ctx, text, size) + 70 + av);
       ctx.save(); ctx.globalAlpha = outK; ctx.translate(CONFIG.layout.centerX, y); const s = easeOutBack(inK); ctx.scale(s, s);
       this.pill(ctx, -w / 2, -34, w, 68, 'rgba(43,29,58,0.88)', tt.color, 6);
-      drawText(ctx, text, 0, 1, { size, maxWidth: 850, color: '#ffffff', strokeWidth: 7, drop: false });
+      if (u) Avatars.draw(ctx, u, -w / 2 + 38, 0, 25, tt.color);
+      drawText(ctx, text, av / 2, 1, { size, maxWidth: 850 - av, color: '#ffffff', strokeWidth: 7, drop: false });
       ctx.restore();
       y -= 80;
     }
@@ -2608,7 +2690,14 @@ const HUD = {
     let y = -H / 2 + 122;
     if (info.team) { drawText(ctx, `TEAM ${info.team} GEWINNT!`, 0, y, { size: 48, color: info.team === 1 ? '#ff8a5c' : '#5cc8ff', strokeWidth: 9 }); y += 56; }
     drawText(ctx, info.speciesName, 0, y, { size: 62, color: R.dark, strokeWidth: 0, stroke: false });
-    drawText(ctx, `„${info.name}“`, 0, y + 62, { size: 50, maxWidth: 760, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
+    const nu = CONFIG.avatars.enabled && info.namerId != null ? Users.map.get(info.namerId) : null;
+    if (nu) {                                                  // Profilbild des Namensgebers neben dem Namen
+      const label = `„${info.name}“`, r = 38, gap = 14;
+      const tw = Math.min(760 - 2 * r - gap, measureText(ctx, label, 50));
+      const x0 = -(2 * r + gap + tw) / 2;
+      Avatars.draw(ctx, nu, x0 + r, y + 62, r, R.dark);
+      drawText(ctx, label, x0 + 2 * r + gap + tw / 2, y + 62, { size: 50, maxWidth: 760 - 2 * r - gap, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
+    } else drawText(ctx, `„${info.name}“`, 0, y + 62, { size: 50, maxWidth: 760, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
     // Dino (kleine Arten werden größer gezeichnet)
     const dinoH = info.team ? 190 : 220, groundY = y + 62 + 37 + dinoH, sc = Math.min(1.25, dinoH / SPECIES_H[info.species]);
     if (R.glow) { const gs = 230 + Math.sin(t * 4) * 15; ctx.globalAlpha *= 0.8; ctx.drawImage(softBlob(R.glow), -gs, groundY - dinoH / 2 - gs, gs * 2, gs * 2); ctx.globalAlpha = outK; }
@@ -2800,7 +2889,7 @@ function normalizeEvent(e) {
   const uid = String(e.uid || e.name || '').slice(0, 64);
   if (!uid) return null;
   return { type, uid, name: String(e.name || '').slice(0, 64), nick: String(e.nick || '').slice(0, 64), text: String(e.text || '').slice(0, 200),
-    count: Math.max(1, Math.min(1000, Number(e.count) || 1)), diamonds: Math.max(0, Math.min(100000, Number(e.diamonds) || 0)) };
+    count: Math.max(1, Math.min(1000, Number(e.count) || 1)), diamonds: Math.max(0, Math.min(100000, Number(e.diamonds) || 0)), avatar: e.avatar ? 1 : 0 };
 }
 
 const EventQueue = {
@@ -3011,6 +3100,12 @@ const Host = {
         }
         case 'resetSettings': Store.del(CONFIG.save.settingsKey); for (const k of Object.keys(CONFIG_DEFAULTS)) CONFIG[k] = JSON.parse(JSON.stringify(CONFIG_DEFAULTS[k])); Sound.applyVolumes(); Users.refilter(); return { msg: 'Einstellungen zurückgesetzt' };
         case 'mute': Users.setMuted(cmd.id, !!cmd.v); Persist.save(); return { msg: (cmd.v ? 'Stumm: ' : 'Wieder sichtbar: ') + (Users.map.get(cmd.id) ? Users.map.get(cmd.id).raw : cmd.id) };
+        case 'noPic': {
+          const u = Users.map.get(cmd.id), nm = u ? u.raw : String(cmd.id);
+          if (cmd.v) Persist.noPic[cmd.id] = nm; else delete Persist.noPic[cmd.id];
+          Game.boardDirty = true; Persist.save();
+          return { msg: (cmd.v ? 'Profilbild ausgeblendet: ' : 'Profilbild wieder an: ') + nm };
+        }
         case 'addWord': { const w = String(cmd.w || '').trim().toLowerCase(); if (w.length < 3) return { msg: 'Wort zu kurz (min. 3 Zeichen)' }; const list = CONFIG.filter.extraWords.slice(); if (!list.includes(w)) list.push(w); CONFIG.filter.extraWords = list; saveSetting('filter.extraWords', list); Users.refilter(); Game.boardDirty = true; return { msg: 'Filterwort hinzugefügt' }; }
         case 'removeWord': { const list = CONFIG.filter.extraWords.filter(x => x !== cmd.w); CONFIG.filter.extraWords = list; saveSetting('filter.extraWords', list); Users.refilter(); return { msg: 'Filterwort entfernt' }; }
         case 'export': return { msg: 'Export erstellt', download: { filename: `dino-ei-spielstand-${todayStr()}.json`, content: Persist.exportJSON(), mime: 'application/json' } };
@@ -3034,7 +3129,7 @@ const Host = {
       helpers: Game.helpers.length, herd: World.herd.length, queue: EventQueue.q.length, fps: Math.round(Loop.fps),
       totals: Game.totals, avgHatch: Game.hatchTimes.length ? Math.round(Game.hatchTimes.reduce((a, b) => a + b, 0) / Game.hatchTimes.length) : null,
       testViewers: TestSim.viewers, testActivity: TestSim.activity, config: CONFIG, storeOk: Store.ok, error: Host.lastError,
-      users: Users.recent(30).map(u => ({ id: u.id, raw: u.raw, name: u.name, filtered: u.filtered, muted: u.muted })),
+      users: Users.recent(30).map(u => ({ id: u.id, raw: u.raw, name: u.name, filtered: u.filtered, muted: u.muted, pic: !!u.hasAvatar || (Net.testMode && String(u.id).startsWith('sim')), noPic: Persist.isNoPic(u.id) })),
       mutedList: Object.entries(Persist.muted).map(([id, n]) => ({ id, raw: n })),
     };
   },
@@ -3072,7 +3167,7 @@ const SETTINGS_UI = [
   ['Seltenheit (Gewichte)', [['rarity.weights.common', 'Gewöhnlich', 0, 100, 1], ['rarity.weights.rare', 'Selten', 0, 100, 1], ['rarity.weights.epic', 'Episch', 0, 100, 1], ['rarity.weights.legendary', 'Legendär', 0, 100, 1]]],
   ['Rotation', [['rotation.normalsBeforeSpecial', 'Normale vor Spezial', 0, 10, 1], ['rotation.bossAnnounceSec', 'Boss-Ansage (s)', 5, 60, 1], ['rotation.bossEnabled', 'Boss-Ei aktiv', 'bool'], ['rotation.duelEnabled', 'Ei-Duell aktiv', 'bool']]],
   ['Ton', [['audio.master', 'Gesamt', 0, 1, 0.05], ['audio.sfx', 'Effekte', 0, 1, 0.05], ['audio.music', 'Musik', 0, 1, 0.05], ['audio.musicEnabled', 'Eigenmusik an', 'bool']]],
-  ['Anzeige', [['infoBanner.everySec', 'Info-Banner alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool']]],
+  ['Anzeige', [['infoBanner.everySec', 'Info-Banner alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool']]],
 ];
 
 const Panel = {
@@ -3114,7 +3209,7 @@ const Panel = {
       }
     }
     h.push('<div class="btns" style="margin-top:8px;grid-template-columns:1fr"><button data-act="resetSettings">Einstellungen auf Standard</button></div>');
-    h.push('<h2>Moderation</h2><div class="hint">Kommentartexte werden nie angezeigt. Stummgeschaltete zählen weiter, werden aber nirgends eingeblendet.</div>');
+    h.push('<h2>Moderation</h2><div class="hint">Kommentartexte werden nie angezeigt. Stummgeschaltete zählen weiter, werden aber nirgends eingeblendet. „Bild aus“ blendet nur das Profilbild aus (Name bleibt). Profilbilder werden nicht automatisch geprüft – im Zweifel oben in „Anzeige“ ganz ausschalten.</div>');
     h.push('<div class="hint">Zuletzt aktiv:</div><div class="users" id="pUsers"></div>');
     h.push('<div class="hint">Stummgeschaltet:</div><div class="users" id="pMuted" style="max-height:120px"></div>');
     h.push('<div class="hint">Eigenes Filterwort (Namen mit diesem Wortteil → „Anonymer Knacker“):</div><div style="display:flex;gap:6px"><input type="text" id="pWord" placeholder="z. B. spam"><button data-act="addWord">+</button></div><div class="hint" id="pWords"></div>');
@@ -3133,6 +3228,7 @@ const Panel = {
       else if (b.dataset.test) this.send({ c: 'test', k: b.dataset.test });
       else if (b.dataset.bool) { const cur = this.status ? getPath(this.status.config, b.dataset.bool) : getPath(CONFIG, b.dataset.bool); this.send({ c: 'set', path: b.dataset.bool, value: !cur }); }
       else if (b.dataset.mute) this.send({ c: 'mute', id: b.dataset.mute, v: b.dataset.v === '1' });
+      else if (b.dataset.nopic) this.send({ c: 'noPic', id: b.dataset.nopic, v: b.dataset.v === '1' });
       else if (b.dataset.word) this.send({ c: 'removeWord', w: b.dataset.word });
       else switch (b.dataset.act) {
         case 'close': this.toggle(); break;
@@ -3197,10 +3293,10 @@ const Panel = {
       else if (document.activeElement !== inp) { inp.value = val; el.querySelector('#' + id + '_v').textContent = val; }
     }
     if (!this.hoverUsers) {
-      const sig = S.users.map(u => u.id + (u.muted ? 'm' : '') + u.name).join('|');
+      const sig = S.users.map(u => u.id + (u.muted ? 'm' : '') + (u.noPic ? 'n' : '') + (u.pic ? 'p' : '') + u.name).join('|');
       if (sig !== this._usig) {
         this._usig = sig;
-        el.querySelector('#pUsers').innerHTML = S.users.length ? S.users.map(u => `<div class="user"><span title="${esc(u.raw)}">${esc(u.raw)}${u.filtered ? ' <span class="tag">gefiltert</span>' : ''}</span>${u.muted ? '<span class="tag">stumm</span>' : ''}<button data-mute="${esc(u.id)}" data-v="${u.muted ? 0 : 1}">${u.muted ? 'Laut' : 'Stumm'}</button></div>`).join('') : '<div class="hint">Noch keine Interaktionen.</div>';
+        el.querySelector('#pUsers').innerHTML = S.users.length ? S.users.map(u => `<div class="user"><span title="${esc(u.raw)}">${esc(u.raw)}${u.filtered ? ' <span class="tag">gefiltert</span>' : ''}</span>${u.muted ? '<span class="tag">stumm</span>' : ''}${u.pic ? `<button data-nopic="${esc(u.id)}" data-v="${u.noPic ? 0 : 1}" title="Profilbild im Stream ein/aus">${u.noPic ? 'Bild an' : 'Bild aus'}</button>` : ''}<button data-mute="${esc(u.id)}" data-v="${u.muted ? 0 : 1}">${u.muted ? 'Laut' : 'Stumm'}</button></div>`).join('') : '<div class="hint">Noch keine Interaktionen.</div>';
       }
     }
     const msig = S.mutedList.map(u => u.id).join('|');
