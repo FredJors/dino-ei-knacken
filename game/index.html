@@ -99,8 +99,9 @@ const CONFIG = {
     safeTop: 140,                         // darüber: TikTok-Profilzeile
     safeRight: 945,                       // rechts davon: TikTok-Buttons → nur Deko
     safeBottom: 1280,                     // unteres Drittel: Chat → nur Deko
-    centerX: 480,                         // Mitte der sicheren Fläche
-    groundY: 1110,                        // Boden, auf dem das Ei im Nest liegt → Ei-Mitte ≈ 925 (Bildmitte 960).
+    centerX: 480,                         // Mitte der sicheren Fläche (für Texte/Banner)
+    eggX: 540,                            // Ei genau in der Bildmitte; links daneben die Bestenliste, rechts die Hype-Leiste
+    groundY: 1110,                      // Boden, auf dem das Ei im Nest liegt → Ei-Mitte ≈ 925 (Bildmitte 960).
                                           // Landschaft, Herde & Einblendungen verschieben sich automatisch mit.
   },
   timer: {                                 // Meteor-Countdown in Sekunden
@@ -139,7 +140,16 @@ const CONFIG = {
   infoBanner: { everySec: 45, showSec: 8 },
   leaderboard: { rotateSec: 9 },
   dayNight: { cycleSec: 600 },
-  miniEvents: { minSec: 60, maxSec: 120 },
+  miniEvents: { minSec: 35, maxSec: 70 },  // Hintergrund-Ereignisse (Regen, Parade, Glühwürmchen …)
+  missions: {                             // Mini-Missionen: z. B. "25 Kommentare in 30 s" → MEGA-RISS
+    enabled: true, minGapSec: 55, maxGapSec: 95,
+    rewardPct: 0.15,                      // Bonus-Schaden in % der Ei-HP
+    difficulty: 1.0,                      // Ziel = aktuelle Aktivität × difficulty (0.6 = leichter, 1.3 = schwerer)
+  },
+  hype: {                                 // Hype-Leiste füllt sich durch Aktivität → kurz doppelter Schaden
+    enabled: true, durationSec: 12, multiplier: 2, cooldownSec: 30,
+  },
+  bubbles: { enabled: true },             // Sprechblasen des Eis ("Hallo? Ist da wer?" …)
   audio: { master: 0.55, sfx: 0.7, music: 0.35, musicEnabled: true },
   names: { maxLen: 16, useNickname: false, anonymous: 'Anonymer Knacker' },
   avatars: { enabled: true },             // Profilbilder in Bestenliste, Karte & Einblendungen (nur mit Bridge)
@@ -496,6 +506,24 @@ class AudioEngine {
   }
   rumble(dur = 1.6, vol = 0.25) { if (!this._ok()) return; const t = this.ctx.currentTime; this._noise(t, dur, vol, 'lowpass', 220, 60, 1); }
   sparkle() { if (!this._ok()) return; const t = this.ctx.currentTime; [88, 91, 95, 100].forEach((n, i) => this._osc('sine', this._n(n), null, t + i * 0.06, 0.25, 0.05)); }
+  hype() {                                 // Hype startet: aufsteigender Wusch + Akkord
+    if (!this._ok()) return;
+    const t = this.ctx.currentTime;
+    this._noise(t, 0.7, 0.3, 'bandpass', 300, 3000, 2);
+    [60, 64, 67, 72, 76].forEach((n, i) => this._osc('sawtooth', this._n(n), null, t + 0.25 + i * 0.05, 0.6, 0.04, null, 0.02));
+    [72, 79, 84].forEach(n => this._osc('triangle', this._n(n), null, t + 0.5, 0.8, 0.1));
+  }
+  missionStart() {                         // kurzes "Ding-Ding"
+    if (!this._ok()) return;
+    const t = this.ctx.currentTime;
+    [79, 84, 79, 84].forEach((n, i) => this._osc('square', this._n(n), null, t + i * 0.1, 0.1, 0.04));
+  }
+  missionDone(ok) {
+    if (!this._ok()) return;
+    const t = this.ctx.currentTime;
+    if (ok) [72, 76, 79, 84, 88].forEach((n, i) => this._osc('triangle', this._n(n), null, t + i * 0.08, 0.4, 0.13));
+    else [67, 63, 60].forEach((n, i) => this._osc('triangle', this._n(n), null, t + i * 0.16, 0.35, 0.09));
+  }
 
   /* Meteor-Dringlichkeit (0..1) → Grollen + schnellere Musik */
   setUrgency(u) {
@@ -1235,7 +1263,10 @@ class HerdDino {
     this.state = 'idle'; this.timer = rand(0.5, 4); this.t = rand(0, 20);
     this.speed = rand(26, 44); this.walk = 0; this.rot = 0; this.leaving = false; this.dead = false;
     this.scaleMul = 1; this.joining = false; this.blinkT = rand(2, 6); this.blink = 0;
+    this.baseSpeed = this.speed; this.parade = false; this.hop = 0; this.vh = 0; this.jumpIn = -1;
   }
+  /* Freudensprung (nach kurzer Verzögerung, damit die Herde "Welle" macht) */
+  jump(delay = 0) { if (!this.leaving) this.jumpIn = delay; }
   get baseScale() { return lerp(0.36, 0.5, clamp((this.y - HERD_BAND.y0) / (HERD_BAND.y1 - HERD_BAND.y0), 0, 1)) * (this.species === 'brachiosaurus' ? 0.85 : 1); }
   join(fromX, fromY) {
     this.x = fromX; this.y = fromY; this.joining = true; this.scaleMul = 2.2; this.speed = 150;
@@ -1246,6 +1277,8 @@ class HerdDino {
   update(dt) {
     this.t += dt;
     this.blinkT -= dt; if (this.blinkT < 0) { this.blink = 0.14; this.blinkT = rand(2.5, 6); } if (this.blink > 0) this.blink -= dt;
+    if (this.jumpIn >= 0) { this.jumpIn -= dt; if (this.jumpIn < 0 && this.hop <= 0) this.vh = rand(300, 420); }
+    if (this.hop > 0 || this.vh > 0) { this.vh -= 1500 * dt; this.hop = Math.max(0, this.hop + this.vh * dt); if (this.hop <= 0) this.vh = 0; }
     if (this.state === 'stumble') {
       this.timer -= dt; const k = 2.6 - this.timer;
       this.rot = k < 0.35 ? -easeOutCubic(k / 0.35) * 1.25 : k < 1.9 ? -1.25 + Math.sin(k * 20) * 0.03 : -1.25 * (1 - easeOutCubic((k - 1.9) / 0.7));
@@ -1256,7 +1289,8 @@ class HerdDino {
       const dx = this.tx - this.x, dy = this.ty - this.y, d = Math.hypot(dx, dy);
       if (d < 4) {
         this.state = 'idle'; this.timer = rand(2.5, 8); this.walk = 0;
-        if (this.joining) { this.joining = false; this.speed = rand(26, 44); }
+        if (this.joining) { this.joining = false; this.speed = this.baseSpeed; }
+        if (this.parade) { this.parade = false; this.speed = this.baseSpeed; }
         if (this.leaving) this.dead = true;
       } else {
         const sp = Math.min(d, this.speed * dt);
@@ -1274,7 +1308,11 @@ class HerdDino {
   draw(ctx) {
     const s = this.baseScale * this.scaleMul;
     ctx.fillStyle = 'rgba(30,50,20,0.22)';
-    ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, 120 * s, 18 * s, 0, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, 120 * s * (1 - Math.min(this.hop, 80) / 200), 18 * s, 0, 0, TAU); ctx.fill();
+    if (this.hop > 0) { ctx.save(); ctx.translate(0, -this.hop * s * 2); this._drawBody(ctx, s); ctx.restore(); return; }
+    this._drawBody(ctx, s);
+  }
+  _drawBody(ctx, s) {
     const R = RARITIES[this.rarity];
     if (R && R.glow) { const g = softBlob(R.glow); const gs = 200 * s * (1 + Math.sin(this.t * 3) * 0.08); ctx.globalAlpha = 0.55; ctx.drawImage(g, this.x - gs, this.y - SPECIES_H[this.species] * s * 0.55 - gs, gs * 2, gs * 2); ctx.globalAlpha = 1; }
     if (this.joining) {
@@ -1293,14 +1331,14 @@ class HerdDino {
       const hy = this.y - 60 * s - 30;
       for (let i = 0; i < 3; i++) { const a = this.t * 5 + i * TAU / 3; Art.starPath(ctx, this.x + Math.cos(a) * 34, hy + Math.sin(a) * 10, 9); ctx.fillStyle = '#ffe14d'; ctx.fill(); }
     }
-    if (this.name && !this.joining) drawText(ctx, this.name, this.x, this.y - SPECIES_H[this.species] * s - 16, { size: 22, strokeWidth: 5, color: R ? (this.rarity === 'common' ? '#ffffff' : R.color) : '#fff', drop: false, alpha: 0.92 });
+    if (this.name && !this.joining) drawText(ctx, this.name, this.x, this.y - SPECIES_H[this.species] * s - 18, { size: 28, strokeWidth: 6, color: R ? (this.rarity === 'common' ? '#ffffff' : R.color) : '#fff', drop: false, alpha: 0.92 });
   }
   toJSON() { return { species: this.species, rarity: this.rarity, palIdx: this.palIdx, name: this.name, seed: this.seed, born: this.born, id: this.id }; }
 }
 
 const World = {
   t: 0, dayPhase: 0.12, night: 0,
-  clouds: [], stars: [], flyers: [], butterflies: [], drops: [], herd: [], shooting: [], grass: [], ferns: [],
+  clouds: [], stars: [], flyers: [], butterflies: [], fireflies: [], drops: [], herd: [], shooting: [], grass: [], ferns: [],
   rain: 0, rainTarget: 0, rainEnd: 0, rainbow: 0, rainbowEnd: 0, eruption: 0, nextEventAt: 0, nextFlyerAt: 8, nextEruptAt: 200,
   lastEvent: '',
 
@@ -1314,11 +1352,23 @@ const World = {
       this.grass.push({ x: r() * 1080, y, h: 18 + (y - 1000) / 900 * 34 + r() * 10, n: 3 + Math.floor(r() * 3), p: r() * TAU, c: r() < 0.5 ? '#4f9f3f' : '#62b84a' });
     }
     this.grass.sort((a, b) => a.y - b.y);
-    // Farne: [x, y, Größe, Anzahl Wedel, Grundwinkel-Streuung]
+    // Farne: [x, y, Größe, Anzahl Wedel] – wenige, sich nicht überlappende Büschel.
+    // Jeder Wedel ist eine gebogene Mittelrippe mit gezackten Fiedern; beim Wiegen biegt sich
+    // die Spitze stärker als der Ansatz (statt starrer, rotierender Stäbe).
     this.ferns = [
-      [-10, 1930, 1.25, 7], [140, 1955, 0.95, 6], [1090, 1930, 1.3, 7], [950, 1960, 0.9, 6],
-      [40, 1090 + LAND_DY, 0.55, 6], [1040, 1075 + LAND_DY, 0.6, 6], [-20, 1450 + LAND_DY / 2, 0.8, 6], [1100, 1480 + LAND_DY / 2, 0.85, 6],
-    ].map(([x, y, s, n], i) => ({ x, y, s, n, p: i * 1.7 }));
+      [-30, 1940, 1.15, 7], [1110, 1940, 1.2, 7],
+      [40, 1090 + LAND_DY, 0.6, 6], [1040, 1075 + LAND_DY, 0.62, 6],
+      [-10, 1450 + LAND_DY / 2, 0.8, 6], [1090, 1480 + LAND_DY / 2, 0.82, 6],
+    ].map(([x, y, s, n], fi) => {
+      const fronds = [];
+      for (let i = 0; i < n; i++) {
+        const off = (i - (n - 1) / 2) / ((n - 1) / 2);          // -1 … 1 (links … rechts)
+        fronds.push({ a: -Math.PI / 2 + off * 1.0 + (r() - 0.5) * 0.12, L: 270 * s * (0.78 + 0.22 * Math.cos(off * 1.2)) * (0.92 + r() * 0.16),
+          droop: 0.1 + Math.abs(off) * 0.16, p: r() * TAU, col: i % 2 ? '#5cbc4e' : '#4aa645', order: Math.abs(off) });
+      }
+      fronds.sort((a, b) => b.order - a.order);                  // äußere Wedel zuerst (hinten)
+      return { x, y, s, fronds, p: fi * 1.7 };
+    });
     this.nextEventAt = rand(CONFIG.miniEvents.minSec, CONFIG.miniEvents.maxSec);
   },
 
@@ -1385,16 +1435,6 @@ const World = {
     }
     for (let i = 0; i < 9; i++) { const x = r() * 1080, y = 200 + r() * 700, s = 10 + r() * 16; gg.fillStyle = '#a9a3b8'; gg.beginPath(); gg.ellipse(x, y, s * 1.4, s, 0, 0, TAU); gg.fill(); gg.fillStyle = '#c9c4d6'; gg.beginPath(); gg.ellipse(x - s * 0.3, y - s * 0.3, s * 0.7, s * 0.45, 0, 0, TAU); gg.fill(); }
     this.layerGround = gr;
-    // Farnwedel-Sprite
-    const [f, fg] = mk(300, 90);
-    fg.strokeStyle = '#3f8a35'; fg.lineWidth = 6; fg.lineCap = 'round'; fg.beginPath(); fg.moveTo(4, 45); fg.quadraticCurveTo(150, 35, 296, 48); fg.stroke();
-    for (let i = 0; i < 15; i++) {
-      const x = 16 + i * 18.5, l = 38 * (1 - i / 17) + 6;
-      fg.fillStyle = i % 2 ? '#58b048' : '#4ea43f';
-      fg.beginPath(); fg.ellipse(x + 6, 45 - l * 0.5, 7, l * 0.55, 0.45, 0, TAU); fg.fill();
-      fg.beginPath(); fg.ellipse(x + 6, 45 + l * 0.5, 7, l * 0.55, -0.45, 0, TAU); fg.fill();
-    }
-    this.fernImg = f;
   },
 
   skyAt(p) {
@@ -1406,6 +1446,7 @@ const World = {
   update(dt) {
     this.t += dt;
     this.dayPhase = (this.dayPhase + dt / CONFIG.dayNight.cycleSec) % 1;
+    this.night = this.skyAt(this.dayPhase).night;          // auch ohne Zeichnen aktuell (z. B. für Glühwürmchen)
     for (const c of this.clouds) { c.x += c.sp * dt * (1 + this.rain * 2); if (c.x > 1180) { Object.assign(c, this.makeCloud(-c.w - rand(0, 200))); } }
     // Vulkanrauch (immer) + gelegentliche Eruption
     this._smokeT = (this._smokeT || 0) - dt;
@@ -1419,7 +1460,7 @@ const World = {
     }
     if (this.t > this.nextEruptAt) { this.nextEruptAt = this.t + rand(150, 260); this.erupt(); }
     // Flugsaurier im Hintergrund
-    if (this.t > this.nextFlyerAt) { this.nextFlyerAt = this.t + rand(18, 40); this.spawnFlyer(1); }
+    if (this.t > this.nextFlyerAt) { this.nextFlyerAt = this.t + rand(10, 24); this.spawnFlyer(Math.random() < 0.3 ? 2 : 1); }
     for (const f of this.flyers) { f.x += f.vx * dt; f.y += Math.sin(this.t * 1.3 + f.p) * 8 * dt; }
     this.flyers = this.flyers.filter(f => f.x > -150 && f.x < 1230);
     // Schmetterlinge
@@ -1432,6 +1473,9 @@ const World = {
       if (b.x < 30) b.vx += 200 * dt; if (b.x > 1050) b.vx -= 200 * dt; if (b.y > 1500) b.vy -= 200 * dt; if (b.y < 600 && b.life > 3) b.vy += 200 * dt;
     }
     this.butterflies = this.butterflies.filter(b => b.life > 0 && b.y > -50);
+    // Glühwürmchen (nachts)
+    for (const g of this.fireflies) { g.t += dt; g.life -= dt; g.vx += (Math.random() - 0.5) * 120 * dt; g.vy += (Math.random() - 0.5) * 120 * dt; g.vx = clamp(g.vx, -40, 40); g.vy = clamp(g.vy, -30, 30); g.x += g.vx * dt; g.y += g.vy * dt; }
+    this.fireflies = this.fireflies.filter(g => g.life > 0);
     // Regen
     if (this.rainTarget && this.t > this.rainEnd) { this.rainTarget = 0; this.rainbowEnd = this.t + 24; }
     this.rain = lerp(this.rain, this.rainTarget, dt * 0.8);
@@ -1454,7 +1498,7 @@ const World = {
 
   /* --- Mini-Ereignisse --- */
   randomEvent(forced) {
-    const opts = ['rain', 'shooting', 'stumble', 'butterflies', 'eruption', 'flyby'].filter(o => o !== this.lastEvent);
+    const opts = ['rain', 'shooting', 'stumble', 'butterflies', 'eruption', 'flyby', 'parade', 'fireflies'].filter(o => o !== this.lastEvent && (o !== 'parade' || this.herd.length >= 3));
     const ev = forced || pick(opts);
     this.lastEvent = ev;
     switch (ev) {
@@ -1463,7 +1507,16 @@ const World = {
       case 'stumble': { const c = this.herd.filter(h => h.state !== 'stumble' && !h.joining && !h.leaving && h.species !== 'pteranodon'); if (c.length) { const h = pick(c); if (h.stumble()) for (let i = 0; i < 10; i++) FX.spawn({ type: 'blob', layer: 1, x: h.x + rand(-40, 40), y: h.y - 5, vx: rand(-60, 60), vy: rand(-40, -10), size: rand(10, 18), grow: 20, life: 1, color: '#c9b08a', alpha: 0.7 }); } else this.randomEvent('butterflies'); break; }
       case 'butterflies': for (let i = 0; i < 7; i++) this.butterflies.push({ x: rand(100, 900), y: rand(1300, 1700), vx: rand(-40, 40), vy: rand(-60, -20), t: rand(0, 5), life: rand(20, 28), c: pick(['#ff7fb0', '#ffe14d', '#8fd3ff', '#b98bff', '#ff9d5c']) }); break;
       case 'eruption': this.erupt(); break;
-      case 'flyby': this.spawnFlyer(4); break;
+      case 'flyby': this.spawnFlyer(rand(0, 1) < 0.5 ? 4 : 7); break;
+      case 'parade': {                                       // Herden-Parade: alle rennen quer über die Wiese
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        this.herd.filter(h => !h.joining && !h.leaving && h.state !== 'stumble').forEach((h, i) => { h.parade = true; h.speed = rand(130, 170); h.state = 'walk'; h.tx = dir > 0 ? HERD_BAND.x1 - rand(0, 80) : HERD_BAND.x0 + rand(0, 80); h.ty = clamp(h.y + rand(-40, 40), HERD_BAND.y0, HERD_BAND.y1); h.jump(i * 0.12); });
+        break;
+      }
+      case 'fireflies':                                      // nachts Glühwürmchen, tagsüber Schmetterlinge
+        if (this.night < 0.4) return this.randomEvent('butterflies');
+        for (let i = 0; i < 24; i++) this.fireflies.push({ x: rand(60, 1020), y: rand(1150, 1750), vx: rand(-20, 20), vy: rand(-15, 15), t: rand(0, 6), life: rand(20, 28), p: rand(0, TAU) });
+        break;
     }
     return ev;
   },
@@ -1550,18 +1603,58 @@ const World = {
       }
     }
     for (const f of this.ferns) {
-      for (let i = 0; i < f.n; i++) {
-        const base = -Math.PI / 2 + (i - (f.n - 1) / 2) * 0.36;
-        const sway = Math.sin(this.t * 1.1 * wind + f.p + i * 0.6) * 0.05 * wind;
-        ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(base + sway); ctx.scale(f.s * (0.85 + (i % 3) * 0.1), f.s);
-        ctx.drawImage(this.fernImg, 0, -45); ctx.restore();
+      for (const fr of f.fronds) {
+        const sway = (Math.sin(this.t * 1.15 * wind + f.p + fr.p) * 0.05 + Math.sin(this.t * 0.37 + f.p) * 0.025) * wind;
+        this._frond(ctx, f.x, f.y, fr, sway, f.s);
       }
     }
+  },
+  /* Ein Farnwedel: gebogene Mittelrippe (quadratische Kurve) + gezackte Fiedern als EINE Fläche */
+  _frond(ctx, bx, by, fr, sway, s) {
+    const L = fr.L, a = fr.a + sway * 0.5;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    const droop = fr.droop + Math.sin(this.t * 0.9 + fr.p) * 0.02;
+    const ex = bx + dx * L + sway * L * 0.35, ey = by + dy * L + droop * L;      // Spitze hängt & wiegt stärker
+    const cx = bx + dx * L * 0.55, cy = by + dy * L * 0.55;
+    const K = 12, plus = [], minus = [];
+    for (let k = 0; k <= K; k++) {
+      const t = 0.07 + 0.87 * k / K, u = 1 - t;
+      const px = u * u * bx + 2 * u * t * cx + t * t * ex, py = u * u * by + 2 * u * t * cy + t * t * ey;
+      let tx = 2 * u * (cx - bx) + 2 * t * (ex - cx), ty = 2 * u * (cy - by) + 2 * t * (ey - cy);
+      const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+      const nx = -ty, ny = tx;
+      const pl = L * 0.16 * (1 - t * 0.78) * Math.min(1, t / 0.16);            // Fiederlänge: zur Spitze kürzer
+      for (const [arr, sg] of [[plus, 1], [minus, -1]]) {
+        arr.push([px + sg * nx * pl * 0.12, py + sg * ny * pl * 0.12,                                   // Kerbe an der Rippe
+                  px + sg * nx * pl * 0.75 - tx * pl * 0.2, py + sg * ny * pl * 0.75 - ty * pl * 0.2,       // Kontrollpunkt (runder Rücken)
+                  px + sg * nx * pl * 0.8 + tx * pl * 0.6, py + sg * ny * pl * 0.8 + ty * pl * 0.6]);      // Fiederspitze (nach vorn)
+      }
+    }
+    ctx.beginPath(); ctx.moveTo(bx, by);
+    for (const q of plus) { ctx.lineTo(q[0], q[1]); ctx.quadraticCurveTo(q[2], q[3], q[4], q[5]); }
+    ctx.lineTo(ex, ey);
+    for (let k = minus.length - 1; k >= 0; k--) { const q = minus[k]; ctx.lineTo(q[4], q[5]); ctx.quadraticCurveTo(q[2], q[3], q[0], q[1]); }
+    ctx.closePath();
+    ctx.fillStyle = fr.col; ctx.fill();
+    ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(1.5, 3 * s); ctx.strokeStyle = '#2f7a30'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(cx, cy, ex, ey);
+    ctx.lineWidth = Math.max(2, 4.5 * s); ctx.strokeStyle = '#2f7a30'; ctx.stroke();
   },
   drawNightTint(ctx) {
     if (this.night > 0.02) { ctx.fillStyle = `rgba(28,22,90,${this.night * 0.36})`; ctx.fillRect(0, 0, 1080, 1920); }
   },
   drawFront(ctx) {
+    // Glühwürmchen: weich leuchtende Punkte, flackern
+    if (this.fireflies.length) {
+      ctx.globalCompositeOperation = 'lighter';
+      const img = softBlob('#d8ff6a');
+      for (const g of this.fireflies) {
+        const a = clamp(0.35 + 0.65 * Math.max(0, Math.sin(g.t * 3 + g.p)), 0, 1) * clamp(g.life / 2, 0, 1);
+        ctx.globalAlpha = a; ctx.drawImage(img, g.x - 22, g.y - 22, 44, 44);
+        ctx.globalAlpha = Math.min(1, a * 1.4); ctx.fillStyle = '#fbffd0'; ctx.fillRect(g.x - 2.5, g.y - 2.5, 5, 5);
+      }
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    }
     // Schmetterlinge & Regen ganz vorn (über dem Ei, unter der Schrift)
     for (const b of this.butterflies) {
       const f = Math.abs(Math.sin(b.t * 14));
@@ -1820,6 +1913,7 @@ class Helper {
     } else {
       this.walk = 0;
       if (eggX != null) this.face = eggX > this.x ? 1 : -1;
+      if (this.hop <= 0 && Math.random() < dt * 0.12) this.vh = rand(110, 190);   // kleine Freudensprünge, auch ohne Treffer
     }
   }
   draw(ctx) {
@@ -1832,11 +1926,24 @@ class Helper {
     ctx.save(); ctx.translate(x, this.y - this.hop); ctx.scale(this.face * this.scale, this.scale); if (k) ctx.rotate(k * 0.55);
     ctx.drawImage(img, HELP_SPR.x0, HELP_SPR.y0, HELP_SPR.w, HELP_SPR.h);
     ctx.restore();
+    if (Game.kings.has(this.uid) && this.state !== 'leave') {            // Krone für den Top-Knacker dieses Eis
+      const cy = this.y - 88 * this.scale - this.hop + Math.sin(this.t * 4) * 3, cx = x + this.face * 6;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(this.face * -0.12);
+      ctx.beginPath(); ctx.moveTo(-20, 10); ctx.lineTo(-22, -10); ctx.lineTo(-10, 0); ctx.lineTo(0, -16); ctx.lineTo(10, 0); ctx.lineTo(22, -10); ctx.lineTo(20, 10); ctx.closePath();
+      ctx.fillStyle = '#ffd23f'; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = OUTLINE; ctx.stroke();
+      ctx.fillStyle = '#ff5f8a'; ctx.beginPath(); ctx.arc(0, 3, 4, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
   }
   /* Namensschild – wird separat gezeichnet (max. 6 gleichzeitig, versetzt, damit nichts überlappt) */
   drawTag(ctx, lift) {
-    const a = clamp((this.tagUntil - now()) / 0.6, 0, 1);
-    drawText(ctx, this.name, clamp(this.x, 90, 880), this.y - 92 * this.scale - this.hop - lift, { size: 24, strokeWidth: 6, color: '#fff', alpha: a, drop: false });
+    const king = Game.kings.has(this.uid);
+    const a = king ? 1 : clamp((this.tagUntil - now()) / 0.6, 0, 1);
+    const text = (king ? '👑 ' : '') + this.name, w = measureText(ctx, text, 30);
+    let y = this.y - 100 * this.scale - this.hop - lift - (king ? 22 : 0);
+    const board = Game.mode !== 'duel' && Game.phase !== 'reveal';          // Bestenliste links oben (x < 376, y < 1030)
+    if (board && this.x - w / 2 < 380 && y < 1040) y = this.y + 30 + lift * 0.6;     // dann Schild unter die Füße
+    drawText(ctx, text, clamp(this.x, 24 + w / 2, 872 - w / 2), y, { size: 30, strokeWidth: 7, color: king ? '#ffe680' : '#fff', alpha: a, drop: false });
   }
 }
 
@@ -1851,6 +1958,7 @@ const Game = {
   shake: 0, flash: 0, flashColor: '#ffffff', activity: [], boardDirty: true,
   totals: { eggs: 0, hatches: 0, impacts: 0 }, lastLikeFlush: 0, lastRescale: 0, lastTick: -1,
   hatchTimes: [], greetBuf: [], greetAt: 0, lastSaveAt: 0, sessionUsers: new Set(),
+  callouts: [], flyHearts: [], kings: new Set(), kingsAt: 0, recentEv: [], lastDamageAt: 0, urgentSaid: false,
 
   /* ---------- Rundensteuerung ---------- */
   pickNextMode() {
@@ -1868,7 +1976,7 @@ const Game = {
     const R = CONFIG.rotation; const sp = []; if (R.bossEnabled) sp.push('boss'); if (R.duelEnabled) sp.push('duel');
     return this.normalsSince >= R.normalsBeforeSpecial && sp.length ? sp[this.specialIdx % sp.length] : 'normal';
   },
-  eggXs(mode) { return mode === 'duel' ? [270, 690] : mode === 'boss' ? [545] : [CONFIG.layout.centerX]; },
+  eggXs(mode) { const x = CONFIG.layout.eggX; return mode === 'duel' ? [290, 710] : mode === 'boss' ? [x + 45] : [x]; },
 
   startRound(mode) {
     this.mode = mode; this.eggNumber++; this.totals.eggs++;
@@ -1879,6 +1987,7 @@ const Game = {
     this.announce = { mode, t: 0, dur };
     this.meteor = { x: 860, y: 560, r: 8, heat: 0, alpha: 0, state: 'sky', t: 0 };
     Sound.announce(mode); Sound.setUrgency(0);
+    Hype.reset(); Missions.cancel(); Bubbles.cur = null; this.urgentSaid = false; this.kings = new Set();
     if (mode === 'duel') {
       for (const u of Users.map.values()) u.team = 0;
       for (const h of this.helpers) { const u = Users.map.get(h.uid); if (u) u.team = Math.random() < 0.5 ? 1 : 2; }
@@ -1914,9 +2023,12 @@ const Game = {
     });
     this.lastPals = this.eggs.map(e => e.palIdx);
     this.softer = 1;
-    this.phase = 'play'; this.phaseT = 0; this.lastRescale = this.t;
+    this.phase = 'play'; this.phaseT = 0; this.lastRescale = this.t; this.lastDamageAt = gnow();
     this.layoutHelpers();
     Sound.whoosh(0.5);
+    Missions.nextAt = gnow() + rand(22, 40);                   // erste Mission kommt früh
+    if (this.mode === 'boss') Bubbles.say('Ich bin das BOSS-EI! 😤', true, this.eggs[0]);
+    else if (this.mode === 'normal' && Math.random() < 0.6) Bubbles.say(pick(['Hallo! Knack mich! 🥚', 'Ich bin bereit! 💪', 'Wer hilft mir hier raus?']), true, this.eggs[0]);
   },
   rescaleHp() {
     // HP passt sich der Zahl aktiver Nutzer an; der Fortschritt in % bleibt erhalten
@@ -1938,6 +2050,9 @@ const Game = {
     this.sessionUsers.add(u.id);
     const W = { chat: 1, like: Math.min(ev.count || 1, 20) * 0.25, follow: 3, share: 2, gift: 3 }[ev.type] || 1;
     this.activity.push({ t: this.t, w: W, team: u.team });
+    this.recentEv.push({ t: gnow(), type: ev.type, n: ev.type === 'like' ? Math.max(1, ev.count || 1) : 1, uid: u.id });
+    Missions.count(ev, u);
+    Hype.add({ chat: 1, like: Math.min(1.2, (ev.count || 1) * 0.08), follow: 3, share: 2.5, gift: 2 }[ev.type] || 0);
     const D = CONFIG.damage;
     switch (ev.type) {
       case 'chat': {
@@ -1953,7 +2068,7 @@ const Game = {
       }
       case 'like':
         u.likeBuf += Math.max(1, ev.count || 1); this.ensureHelper(u);
-        if (Math.random() < 0.35) FX.spawn({ type: 'heart', layer: 2, x: rand(760, 900), y: rand(1000, 1150), vx: rand(-30, 30), vy: rand(-160, -110), size: rand(16, 24), life: 1.4, color: pick(['#ff5f8a', '#ff7fb0', '#ff9db8']) });
+        this.likeHearts(Math.max(1, ev.count || 1));          // Herzen fliegen sichtbar zum Ei
         break;
       case 'follow':
         this.hit(u, D.follow, 'follow');
@@ -2035,6 +2150,9 @@ const Game = {
       egg = this.eggs.find(e => e.team === u.team);
     }
     if (!egg || (egg.state !== 'idle' && egg.state !== 'drop')) return;
+    dmg *= Hype.mult;                                     // Hype: doppelter Schaden
+    const p0 = egg.progress;
+    this.lastDamageAt = gnow();
     egg.hp = Math.max(0, egg.hp - dmg);
     const c = egg.contrib.get(u.id) || { n: u.name, d: 0 }; c.n = u.name; c.d += dmg; egg.contrib.set(u.id, c);
     if (!u.muted) egg.lastHitter = { id: u.id, n: u.name }; else egg.lastHitter = { id: u.id, n: CONFIG.names.anonymous };
@@ -2047,20 +2165,65 @@ const Game = {
     const nShards = kind === 'like' ? (Math.random() < 0.5 ? 1 : 0) : clamp(Math.round(2 + dmg * 1.2), 2, 14);
     this.shards(egg, nShards, u.helper ? u.helper.x : null);
     if (kind !== 'like') Sound.knock(clamp(dmg / 6, 0, 1));
-    if (big) this.shake = Math.min(1, this.shake + 0.4);
+    if (big) { this.shake = Math.min(1, this.shake + 0.4); for (const h of this.helpers) if (Math.random() < 0.5 && h.hop <= 0) h.vh = rand(180, 260); }
     if (kind === 'follow') { egg.bigCrack = 0.7; Sound.bigHit(); this.shake = Math.min(1, this.shake + 0.5); this.flash = Math.max(this.flash, 0.25); this.flashColor = '#fff6c2'; }
     else if (kind === 'share' || kind === 'gift') Sound.chime(kind === 'gift');
+    // Combo: wer schnell nacheinander kommentiert, bekommt einen großen Combo-Pop
+    let combo = 0;
+    if (kind === 'comment') { u.combo = gnow() - (u.lastComboAt || -99) < 6 ? (u.combo || 0) + 1 : 1; u.lastComboAt = gnow(); combo = u.combo; }
     if (!u.muted) {
-      this.pop(u, egg, kind);
+      this.pop(u, egg, kind, combo);
       if (u.helper && u.helper.state === 'idle') u.helper.peck();
     }
-    // Riss-Stufen 20/40/60/80 %
+    if (kind === 'comment' && Math.random() < 0.04) Bubbles.say(pick(Bubbles.HIT), false, egg);
+    this.afterDamage(egg, p0);
+  },
+  /* Gemeinsam für Treffer & Missions-Bonus: Riss-Stufen, Ansagen, Schlüpfen */
+  afterDamage(egg, p0) {
     const st = Math.min(4, Math.floor(egg.progress / 0.2 + 1e-9));
     while (egg.stage < st) {
       egg.stage++; egg.stageAt[egg.stage - 1] = this.t;
       Sound.crack(egg.stage); this.shake = Math.min(1, this.shake + 0.35); this.shards(egg, 14);
+      Bubbles.say(Bubbles.STAGE[egg.stage - 1], true, egg);
+    }
+    if (egg.hp > 0) {
+      for (const [th, text, col] of [[0.5, 'HALB GESCHAFFT! 💪', '#ffe14d'], [0.75, 'Gleich ist es so weit!', '#ffcf3a'], [0.9, 'FAST GESCHAFFT! 🔥', '#ff9f45']]) {
+        if (p0 < th && egg.progress >= th) { this.callout(text, { color: col, x: egg.x }); Sound.sparkle(); }
+      }
     }
     if (egg.hp <= 0) this.hatch(egg);
+  },
+  /* Missions-Belohnung: großer Riss in % der Ei-HP (zählt für niemanden in der Bestenliste) */
+  bonusHit(pct) {
+    if (this.phase !== 'play') return;
+    for (const egg of this.eggs) {
+      if (egg.state !== 'idle' && egg.state !== 'drop') continue;
+      const p0 = egg.progress;
+      egg.hp = Math.max(0, egg.hp - egg.maxHp * pct);
+      egg.bigCrack = 0.9; egg.flash = 0.9; egg.va += 4; if (egg.h <= 0) egg.vh = 340;
+      this.shards(egg, 26);
+      this.afterDamage(egg, p0);
+      if (this.phase !== 'play') break;
+    }
+    this.shake = 1; this.flash = Math.max(this.flash, 0.35); this.flashColor = '#e8ffd8'; Sound.bigHit();
+    const cols = ['#7bd35b', '#ffe14d', '#5cc8ff', '#ff9f45'];
+    for (let i = 0; i < 40; i++) FX.spawn({ type: 'confetti', layer: 2, x: CONFIG.layout.centerX + rand(-300, 300), y: 600, vx: rand(-300, 300), vy: rand(-500, -100), g: 800, drag: 1.2, size: rand(6, 10), rot: rand(0, TAU), vr: rand(-8, 8), life: rand(1.5, 2.4), color: pick(cols) });
+    for (const h of this.helpers) h.cheerT = 1.4;
+  },
+  callout(text, o = {}) {
+    if (this.callouts.length >= 3) this.callouts.shift();
+    const e = this.eggs[0];
+    const x = o.x != null ? o.x : (this.mode === 'duel' || !e ? CONFIG.layout.centerX : e.x);
+    this.callouts.push({ text, t: 0, life: o.life || 1.9, color: o.color || '#ffe14d', size: o.size || 76, x: clamp(x, 300, 700), y: o.y != null ? o.y : CONFIG.layout.groundY - 270 });
+  },
+  likeHearts(n) {
+    const k = Math.min(3, Math.ceil(n / 6));
+    const e = this.eggs.length ? pick(this.eggs) : null;
+    const tx = e ? e.x : CONFIG.layout.eggX, ty = e ? e.cy : CONFIG.layout.groundY - 185;
+    for (let i = 0; i < k && this.flyHearts.length < 40; i++) {
+      this.flyHearts.push({ x0: rand(830, 920), y0: rand(1150, 1260), cx: rand(720, 900), cy: rand(640, 840), x1: tx + rand(-60, 60), y1: ty + rand(-90, 30),
+        t: -i * 0.12, dur: rand(0.9, 1.3), col: pick(['#ff5f8a', '#ff7fb0', '#ff3d6e']), s: rand(20, 28) });
+    }
   },
   shards(egg, n, fromX) {
     for (let i = 0; i < n; i++) {
@@ -2071,18 +2234,21 @@ const Game = {
         rot: rand(0, TAU), vr: rand(-10, 10), life: rand(0.8, 1.3), color: Math.random() < 0.7 ? egg.color : egg.color2, floor: egg.groundY + rand(10, 60) });
     }
   },
-  pop(u, egg, kind) {
-    if (this.pops.length >= CONFIG.pops.max) { this.popOverflow++; return; }
+  pop(u, egg, kind, combo = 0) {
+    if (this.pops.length >= CONFIG.pops.max && combo < 3) { this.popOverflow++; return; }
     const a = rand(-Math.PI * 0.92, -Math.PI * 0.08);
-    const col = { comment: '#ffffff', like: '#ff9db8', follow: '#ffd84a', share: '#7fe0ff', gift: '#ff9be0' }[kind] || '#fff';
-    this.pops.push({ text: u.name, x: egg.x + Math.cos(a) * egg.rx * 1.05, y: egg.cy + Math.sin(a) * egg.ry * 0.95, t: 0, life: 1.3, color: col, size: kind === 'follow' ? 40 : kind === 'like' ? 26 : 30 });
+    let text = u.name, col = { comment: '#ffffff', like: '#ff9db8', follow: '#ffd84a', share: '#7fe0ff', gift: '#ff9be0' }[kind] || '#fff';
+    let size = { follow: 54, like: 34, comment: 40 }[kind] || 46, life = 1.3;
+    if (combo >= 3) { text = `${u.name} x${combo} 🔥`; col = combo >= 10 ? '#ff6b6b' : combo >= 5 ? '#ffa040' : '#ffd84a'; size = 46 + Math.min(combo, 12) * 1.5; life = 1.6; if (combo === 5 || combo === 10) Sound.sparkle(); }
+    if (this.pops.length >= CONFIG.pops.max) this.pops.shift();
+    this.pops.push({ text, x: egg.x + Math.cos(a) * egg.rx * 1.05, y: egg.cy + Math.sin(a) * egg.ry * 0.95, t: 0, life, color: col, size });
   },
   teamPop(u, team) {
     if (u.muted) return;
     const egg = this.eggs.find(e => e.team === team);
     const x = egg ? egg.x : this.eggXs('duel')[team - 1];
     const y = egg ? egg.cy + rand(-30, 50) : CONFIG.layout.groundY - 150;
-    if (this.pops.length < CONFIG.pops.max + 4) this.pops.push({ text: `${u.name} → ${team}`, x: x + rand(-50, 50), y, t: 0, life: 1.6, color: team === 1 ? '#ffb08a' : '#9fe0ff', size: 30 });
+    if (this.pops.length < CONFIG.pops.max + 4) this.pops.push({ text: `${u.name} → ${team}`, x: x + rand(-50, 50), y, t: 0, life: 1.6, color: team === 1 ? '#ffb08a' : '#9fe0ff', size: 40 });
   },
   greet(u) {
     if (u.muted || u.filtered) return;            // gefilterte Namen nicht extra hervorheben
@@ -2133,6 +2299,8 @@ const Game = {
     for (let i = 0; i < 70; i++) FX.spawn({ type: 'confetti', layer: 2, x: egg.x + rand(-60, 60), y: egg.cy, vx: rand(-520, 520), vy: rand(-1100, -450), g: 900, drag: 1.2, size: rand(6, 11), rot: rand(0, TAU), vr: rand(-8, 8), life: rand(1.8, 2.8), color: pick(confCols), important: true });
     if (rarity === 'epic' || rarity === 'legendary') for (let i = 0; i < 40; i++) FX.spawn({ type: 'star', layer: 2, x: egg.x, y: egg.cy, vx: rand(-420, 420), vy: rand(-520, 200), drag: 1.5, size: rand(8, 16), rot: rand(0, TAU), vr: rand(-4, 4), life: rand(1.2, 2.2), color: RARITIES[rarity].glow, important: true });
     for (const h of this.helpers) h.cheerT = 2.4;
+    for (const h of World.herd) h.jump(rand(0, 0.7));          // die Herde jubelt mit
+    Missions.cancel();
     // Meteor verglüht
     if (this.meteor) { this.meteor.state = 'fizzle'; this.meteor.t = 0; Sound.fizzle(); for (let i = 0; i < 30; i++) FX.spawn({ type: 'spark', layer: 1, x: this.meteor.x, y: this.meteor.y, vx: rand(-260, 260), vy: rand(-260, 200), drag: 2, size: rand(3, 7), life: rand(0.6, 1.2), color: pick(['#ffb13d', '#fff2a8', '#ff7a2f']) }); }
     Sound.setUrgency(0);
@@ -2170,6 +2338,7 @@ const Game = {
     FX.spawn({ type: 'ring', layer: 2, x: cx, y: CONFIG.layout.groundY, size: 30, grow: 900, life: 0.7, color: 'rgba(255,240,200,0.9)', squash: 0.3, important: true });
     for (const e of this.eggs) { this.shards(e, 24); e.state = 'gone'; }
     for (const h of this.helpers) { h.vh = rand(400, 560); h.cheerT = 0; }
+    for (const h of World.herd) h.jump(rand(0, 0.3));
     this.meteor.alpha = 0;
   },
 
@@ -2182,6 +2351,8 @@ const Game = {
       case 'P': this.paused = !this.paused; Sound.paused = this.paused; return this.paused ? 'Pause an' : 'Pause aus';
       case 'M': Sound.setMuted(!Sound.muted); return Sound.muted ? 'Ton aus' : 'Ton an';
       case 'R': this.resetRound(); return 'Ei neu gestartet';
+      case 'N': return Missions.start() ? 'Mission gestartet' : (Missions.active ? 'Es läuft schon eine Mission' : 'Mission jetzt nicht möglich (nur während ein Ei läuft, nicht im Duell)');
+      case 'X': return Hype.start() ? 'HYPE gestartet' : 'Hype jetzt nicht möglich (nur während ein Ei läuft)';
     }
     return '';
   },
@@ -2222,6 +2393,7 @@ const Game = {
         Sound.setUrgency(urg);
         const sec = Math.ceil(this.timeLeft);
         if (sec !== this.lastTick) { this.lastTick = sec; if (sec <= 10 && sec > 0) Sound.tick(sec <= 5); }
+        if (!this.urgentSaid && this.timeLeft < CONFIG.timer.urgentAt) { this.urgentSaid = true; Bubbles.say('Der Meteor kommt! Schneller! 😱', true); }
         if (this.timeLeft <= 0) this.impact();
       } else if (this.phase === 'hatch') {
         if (this.phaseT >= CONFIG.reveal.hatchSec) { this.phase = 'reveal'; this.phaseT = 0; Sound.sparkle(); }
@@ -2231,7 +2403,25 @@ const Game = {
         if (!this._boomed && this.phaseT >= 0.9) this.boom();
         if (this.phaseT >= 5.2) { this.softer = CONFIG.hp.afterImpactMult; this.startRound(this.pickNextMode()); }
       }
+      Hype.update(dt); Missions.update(dt); Bubbles.update(dt);
     }
+    // letzte 60 s an Events (für Missionsziele)
+    const lim60 = gnow() - 60; while (this.recentEv.length && this.recentEv[0].t < lim60) this.recentEv.shift();
+    if (this.recentEv.length > 6000) this.recentEv.splice(0, this.recentEv.length - 6000);
+    // "König des Eis": Top-Knacker pro Ei bekommt eine Krone
+    if (gnow() - this.kingsAt > 0.5 || gnow() < this.kingsAt) {
+      this.kingsAt = gnow(); const k = new Set();
+      if (this.phase === 'play') for (const e of this.eggs) { let best = null; for (const [id, c] of e.contrib) { const uu = Users.map.get(id); if (!Persist.isMuted(id) && !(uu && uu.filtered) && (!best || c.d > best[1])) best = [id, c.d]; } if (best && best[1] >= 2) k.add(best[0]); }
+      if ([...k].join() !== [...this.kings].join()) { this.kings = k; this.boardDirty = true; }
+    }
+    // Ansagen & fliegende Like-Herzen
+    for (const c of this.callouts) c.t += rdt;
+    this.callouts = this.callouts.filter(c => c.t < c.life);
+    for (const h of this.flyHearts) {
+      h.t += rdt;
+      if (h.t >= h.dur) { h.done = true; for (let i = 0; i < 4; i++) FX.spawn({ type: 'spark', layer: 2, x: h.x1, y: h.y1, vx: rand(-120, 120), vy: rand(-120, 60), drag: 2, size: rand(3, 6), life: 0.5, color: h.col }); }
+    }
+    if (this.flyHearts.some(h => h.done)) this.flyHearts = this.flyHearts.filter(h => !h.done);
     this.updateMeteor(rdt);
     this.updateEggs(rdt);
     // Helfer
@@ -2246,7 +2436,7 @@ const Game = {
     this.pops = this.pops.filter(p => p.t < p.life);
     if (this.popOverflow > 0 && now() - this.popOverflowAt > 0.6 && this.eggs.length) {
       this.popOverflowAt = now(); const e = pick(this.eggs);
-      this.pops.push({ text: `+${this.popOverflow} weitere`, x: e.x + rand(-40, 40), y: e.cy - e.ry - 10, t: 0, life: 1.2, color: '#ffe680', size: 34 });
+      this.pops.push({ text: `+${this.popOverflow} weitere`, x: e.x + rand(-40, 40), y: e.cy - e.ry - 10, t: 0, life: 1.2, color: '#ffe680', size: 42 });
       this.popOverflow = 0;
     }
     // Toasts
@@ -2325,6 +2515,118 @@ const Game = {
     } else if (m.state === 'fizzle') {
       m.alpha = Math.max(0, m.alpha - dt * 2.2); m.r *= 1 + dt * 0.6;
     }
+  },
+};
+
+/* ==========================================================================
+   10b. Mehr Action: Hype-Leiste, Mini-Missionen, Sprechblasen des Eis
+   ========================================================================== */
+/* Hype: füllt sich durch Aktivität (relativ zur Zuschauerzahl) → kurz doppelter Schaden */
+const Hype = {
+  value: 0, active: 0, cooldown: 0,
+  get mult() { return this.active > 0 ? CONFIG.hype.multiplier : 1; },
+  target() { return clamp(10 + Users.activeCount() * 0.95, 10, 80); },  // gewichtete Interaktionen bis "voll" (Kommentar = 1)
+  add(w) {
+    if (!CONFIG.hype.enabled || !w || this.active > 0 || this.cooldown > 0 || Game.phase !== 'play' || Game.paused) return;
+    this.value = Math.min(1, this.value + w / this.target());
+    if (this.value >= 1) this.start();
+  },
+  start() {
+    if (Game.phase !== 'play' || this.active > 0) return false;
+    this.active = CONFIG.hype.durationSec; this.value = 1;
+    Game.callout('🔥 HYPE! DOPPELTER SCHADEN!', { color: '#ffb13d', size: 72, life: 2.6 });
+    Sound.hype(); Game.shake = Math.min(1, Game.shake + 0.4);
+    for (const h of World.herd) h.jump(rand(0, 0.5));
+    for (const h of Game.helpers) h.cheerT = 1.6;
+    Bubbles.say('WOOOW! 🔥', true);
+    StatsLog.event('hype', { mode: Game.mode, active: Users.activeCount() });
+    return true;
+  },
+  update(dt) {
+    if (this.active > 0) {
+      this.active -= dt; this.value = Math.max(0, this.active / CONFIG.hype.durationSec);
+      if (Math.random() < dt * 16) { const e = pick(Game.eggs); if (e && (e.state === 'idle' || e.state === 'drop')) FX.spawn({ type: 'spark', layer: 1, x: e.x + rand(-e.rx, e.rx), y: e.groundY - rand(0, e.ry * 1.8), vx: rand(-30, 30), vy: rand(-170, -80), size: rand(4, 9), life: rand(0.6, 1.1), color: pick(['#ffb13d', '#ff7a2f', '#ffe14d']) }); }
+      if (this.active <= 0) { this.active = 0; this.value = 0; this.cooldown = CONFIG.hype.cooldownSec; }
+    } else {
+      if (this.cooldown > 0) this.cooldown -= dt;
+      this.value = Math.max(0, this.value - dt * 0.02);         // langsames Abklingen
+    }
+  },
+  reset() { this.value = 0; this.active = 0; this.cooldown = 0; },
+};
+
+/* Mini-Missionen: Ziel passt sich der aktuellen Aktivität an (schaffbar, aber knackig).
+   Bewusst KEINE Gift-Missionen (kein Gift-Baiting). */
+const MISSION_TYPES = {
+  comments: { icon: '💬', dur: 30, w: 4, label: n => `${n} Kommentare in 30 s!`, target: m => clamp(Math.round(m.rate('chat') * 30 * CONFIG.missions.difficulty), 3, 80) },
+  likes:    { icon: '❤️', dur: 20, w: 3, label: n => `${n} Likes in 20 s!`, target: m => clamp(Math.round(m.rate('like') * 20 * 0.9 * CONFIG.missions.difficulty / 10) * 10, 20, 3000) },
+  people:   { icon: '👥', dur: 30, w: 2, minActive: 4, label: n => `${n} verschiedene Leute in 30 s!`, target: m => clamp(Math.round(m.uniq(30) * CONFIG.missions.difficulty) + 1, 3, 80) },
+  follow:   { icon: '⭐', dur: 60, w: 1, minActive: 6, label: () => '1 neuer Follower in 60 s!', target: () => 1 },
+  share:    { icon: '📣', dur: 60, w: 1, minActive: 3, label: n => n === 1 ? 'Teilt den LIVE: 1 Share in 60 s!' : `Teilt den LIVE: ${n} Shares in 60 s!`, target: () => clamp(Math.round(Users.activeCount() / 20), 1, 5) },
+};
+const Missions = {
+  active: null, result: null, nextAt: 30, people: null,
+  rate(type) { let n = 0; for (const e of Game.recentEv) if (e.type === type) n += e.n; return n / 60; },
+  uniq(sec) { const lim = gnow() - sec, s = new Set(); for (const e of Game.recentEv) if (e.t >= lim) s.add(e.uid); return s.size; },
+  start(key) {
+    if (Game.phase !== 'play' || Game.mode === 'duel' || this.active) return false;
+    const act = Users.activeCount();
+    let k = key && MISSION_TYPES[key] ? key : null;
+    if (!k) {
+      const opts = Object.entries(MISSION_TYPES).filter(([, d]) => !d.minActive || act >= d.minActive);
+      let r = Math.random() * opts.reduce((a, [, d]) => a + d.w, 0);
+      for (const [kk, d] of opts) { r -= d.w; if (r <= 0) { k = kk; break; } }
+      k = k || 'comments';
+    }
+    const d = MISSION_TYPES[k], target = d.target(this);
+    this.active = { key: k, icon: d.icon, dur: d.dur, target, got: 0, t: 0, label: d.label(target) };
+    this.people = new Set(); this.result = null;
+    Sound.missionStart();
+    Bubbles.say(pick(['Ihr schafft das! 💪', "Mission! Los geht's!", 'Hilfe naht! 🎯']), true);
+    return true;
+  },
+  count(ev, u) {
+    const m = this.active; if (!m) return;
+    if (m.key === 'comments' && ev.type === 'chat') m.got++;
+    else if (m.key === 'likes' && ev.type === 'like') m.got += Math.max(1, ev.count || 1);
+    else if (m.key === 'people') { this.people.add(u.id); m.got = this.people.size; }
+    else if (m.key === 'follow' && ev.type === 'follow') m.got++;
+    else if (m.key === 'share' && ev.type === 'share') m.got++;
+    if (m.got >= m.target) this.finish(true);
+  },
+  finish(ok) {
+    const m = this.active; if (!m) return;
+    this.active = null;
+    this.result = { ok, t: 0, life: ok ? 3 : 2.4 };
+    this.nextAt = gnow() + rand(CONFIG.missions.minGapSec, CONFIG.missions.maxGapSec);
+    StatsLog.event('mission', { mode: Game.mode, type: m.key, target: m.target, got: m.got, ok: ok ? 1 : 0 });
+    Sound.missionDone(ok);
+    if (ok) { Game.callout('💥 MEGA-RISS!', { color: '#bfffb0', size: 84, life: 2 }); Game.bonusHit(CONFIG.missions.rewardPct); }
+  },
+  cancel() { this.active = null; this.result = null; },
+  update(dt) {
+    if (this.result) { this.result.t += dt; if (this.result.t > this.result.life) this.result = null; }
+    const m = this.active;
+    if (m) { m.t += dt; if (Game.phase !== 'play') { this.active = null; return; } if (m.t >= m.dur) this.finish(false); return; }
+    if (CONFIG.missions.enabled && Game.phase === 'play' && Game.mode !== 'duel' && gnow() > this.nextAt && Game.timeLeft > 25) this.start();
+  },
+};
+
+/* Sprechblasen: das Ei redet – bei Flaute als Aufforderung, sonst als Reaktion */
+const Bubbles = {
+  cur: null, lastAt: -99,
+  IDLE: ['Hallo? Ist da wer? 🥚', 'Schreib was – dann wackel ich!', 'Ich will hier raus! 🦖', 'Kitzel mich mit Kommentaren!',
+    'Psst … ein Kommentar = ein Stoß!', 'Mir ist sooo langweilig … 😴', 'Wer knackt mich als Erstes?', 'Likes machen mich ganz wackelig! ❤️'],
+  HIT: ['Aua! 😵', 'Hihi, das kitzelt!', 'Mehr! Mehr!', 'Huiii!', 'Noch mal!', 'Das war stark! 💥'],
+  STAGE: ['Da knackt was! 😮', 'Ich seh schon Licht!', 'Gleich bin ich draußen!', 'FAST!! 🐣'],
+  say(text, force, egg) {
+    if (!CONFIG.bubbles.enabled) return;
+    if (!force && (gnow() - this.lastAt < 9 || (this.cur && this.cur.t < this.cur.life))) return;
+    this.cur = { text, t: 0, life: 3.4, egg: egg || null }; this.lastAt = gnow();
+  },
+  update(dt) {
+    if (this.cur) { this.cur.t += dt; if (this.cur.t > this.cur.life) this.cur = null; }
+    if (Game.phase === 'play' && gnow() - Game.lastDamageAt > 12 && gnow() - this.lastAt > 15) this.say(pick(this.IDLE));
   },
 };
 
@@ -2459,79 +2761,82 @@ const HUD = {
     ctx.save(); ctx.translate(CONFIG.layout.centerX, 222); ctx.scale(s, s); ctx.drawImage(this.cta.img, -470, -90); ctx.restore();
   },
 
-  /* ---------- Timer + Fortschritt ---------- */
+  /* ---------- Timer + Fortschritt (groß, gut lesbar auf dem Handy) ---------- */
   drawStatusRow(ctx, t) {
-    const y = 318, h = 66;
-    // Meteor-Timer
+    const y = 322, h = 86;
     let txt = fmtTime(CONFIG.timer[Game.mode] || 240);
     if (Game.phase === 'play') txt = fmtTime(Game.timeLeft);
     else if (Game.phase === 'hatch' || Game.phase === 'reveal') txt = '✓';
     else if (Game.phase === 'impact') txt = '0:00';
     const urgent = Game.phase === 'play' && Game.timeLeft <= CONFIG.timer.urgentAt;
     const pulse = urgent ? 1 + Math.max(0, Math.sin(t * 9)) * 0.06 : 1;
-    ctx.save(); ctx.translate(178, y + h / 2); ctx.scale(pulse, pulse);
-    this.pill(ctx, -138, -h / 2, 276, h, urgent ? (Math.sin(t * 9) > 0 ? '#ff3d3d' : '#c42a4a') : 'rgba(43,29,58,0.82)', urgent ? '#ffe14d' : OUTLINE, 6);
-    // Meteor-Icon
-    ctx.drawImage(softBlob('#ff8a3d'), -138, -34, 68, 68);
-    ctx.fillStyle = '#6b4a5e'; ctx.strokeStyle = OUTLINE; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(-102, 2, 15, 0, TAU); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#ffb13d'; ctx.beginPath(); ctx.moveTo(-90, -8); ctx.lineTo(-70, -26); ctx.lineTo(-84, 4); ctx.closePath(); ctx.fill();
-    drawText(ctx, txt, 28, 2, { size: 50, color: urgent ? '#ffffff' : '#ffe680' });
+    ctx.save(); ctx.translate(173, y + h / 2); ctx.scale(pulse, pulse);
+    this.pill(ctx, -145, -h / 2, 290, h, urgent ? (Math.sin(t * 9) > 0 ? '#ff3d3d' : '#c42a4a') : 'rgba(43,29,58,0.88)', urgent ? '#ffe14d' : OUTLINE, 7);
+    ctx.drawImage(softBlob('#ff8a3d'), -152, -44, 88, 88);
+    ctx.fillStyle = '#6b4a5e'; ctx.strokeStyle = OUTLINE; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(-104, 4, 20, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffb13d'; ctx.beginPath(); ctx.moveTo(-88, -10); ctx.lineTo(-62, -34); ctx.lineTo(-82, 6); ctx.closePath(); ctx.fill();
+    drawText(ctx, txt, 34, 3, { size: 66, color: urgent ? '#ffffff' : '#ffe680' });
     ctx.restore();
-    // Fortschrittsbalken
-    const bx = 336, bw = 584;
-    this.pill(ctx, bx, y, bw, h, 'rgba(43,29,58,0.82)', OUTLINE, 6);
+    const bx = 332, bw = 598, ih = h - 24;
+    this.pill(ctx, bx, y, bw, h, 'rgba(43,29,58,0.88)', OUTLINE, 7);
     if (Game.mode === 'duel' && Game.eggs.length === 2) {
-      const half = (bw - 24) / 2;
+      const half = (bw - 28) / 2;
       Game.eggs.forEach((e, i) => {
-        const x = bx + 10 + i * (half + 4), col = i === 0 ? '#ff8a5c' : '#5cc8ff';
-        ctx.beginPath(); rr(ctx, x, y + 10, half, h - 20, (h - 20) / 2); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
-        ctx.save(); ctx.beginPath(); rr(ctx, x, y + 10, half, h - 20, (h - 20) / 2); ctx.clip();
-        ctx.fillStyle = col; ctx.fillRect(x, y + 10, half * e.progress, h - 20); ctx.restore();
-        drawText(ctx, `${e.team}: ${Math.floor(e.progress * 100)} %`, x + half / 2, y + h / 2 + 1, { size: 34, strokeWidth: 7 });
+        const x = bx + 12 + i * (half + 4), col = i === 0 ? '#ff8a5c' : '#5cc8ff';
+        ctx.beginPath(); rr(ctx, x, y + 12, half, ih, ih / 2); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
+        ctx.save(); ctx.beginPath(); rr(ctx, x, y + 12, half, ih, ih / 2); ctx.clip();
+        ctx.fillStyle = col; ctx.fillRect(x, y + 12, half * e.progress, ih); ctx.restore();
+        drawText(ctx, `${e.team}: ${Math.floor(e.progress * 100)} %`, x + half / 2, y + h / 2 + 2, { size: 44, strokeWidth: 8 });
       });
     } else {
       const e = Game.eggs[0], p = e ? e.progress : 0;
-      const x = bx + 74, w = bw - 88;
-      ctx.beginPath(); rr(ctx, x, y + 10, w, h - 20, (h - 20) / 2); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
+      const x = bx + 92, w = bw - 106;
+      ctx.beginPath(); rr(ctx, x, y + 12, w, ih, ih / 2); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
       if (p > 0) {
-        ctx.save(); ctx.beginPath(); rr(ctx, x, y + 10, w, h - 20, (h - 20) / 2); ctx.clip();
+        ctx.save(); ctx.beginPath(); rr(ctx, x, y + 12, w, ih, ih / 2); ctx.clip();
         const g = ctx.createLinearGradient(x, 0, x + w, 0);
-        if (Game.mode === 'boss') { g.addColorStop(0, '#b86bff'); g.addColorStop(1, '#ff5f8a'); } else { g.addColorStop(0, '#ffe14d'); g.addColorStop(1, '#ff9f45'); }
-        ctx.fillStyle = g; ctx.fillRect(x, y + 10, w * p, h - 20);
-        ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(x, y + 12, w * p, (h - 20) * 0.35);
+        if (Hype.active > 0) { g.addColorStop(0, '#ff7a2f'); g.addColorStop(1, '#ff3d6e'); }
+        else if (Game.mode === 'boss') { g.addColorStop(0, '#b86bff'); g.addColorStop(1, '#ff5f8a'); } else { g.addColorStop(0, '#ffe14d'); g.addColorStop(1, '#ff9f45'); }
+        ctx.fillStyle = g; ctx.fillRect(x, y + 12, w * p, ih);
+        ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(x, y + 15, w * p, ih * 0.33);
         ctx.restore();
       }
-      // kleines Ei-Icon
-      ctx.save(); ctx.translate(bx + 40, y + h / 2 + 2); ctx.scale(0.13, 0.13);
-      ctx.fillStyle = e ? e.color : '#fff3c9'; ctx.fill(EggArt.path(150, 195)); ctx.lineWidth = 45; ctx.strokeStyle = OUTLINE; ctx.stroke(EggArt.path(150, 195)); ctx.restore();
+      ctx.save(); ctx.translate(bx + 48, y + h / 2 + 3); ctx.scale(0.17, 0.17);
+      ctx.fillStyle = e ? e.color : '#fff3c9'; ctx.fill(EggArt.path(150, 195)); ctx.lineWidth = 38; ctx.strokeStyle = OUTLINE; ctx.stroke(EggArt.path(150, 195)); ctx.restore();
       const label = (Game.mode === 'boss' ? 'BOSS ' : '') + Math.floor(p * 100) + ' %';
-      drawText(ctx, label, x + w / 2, y + h / 2 + 1, { size: 36, strokeWidth: 7 });
+      drawText(ctx, label, x + w / 2, y + h / 2 + 2, { size: 48, strokeWidth: 9 });
     }
   },
 
-  /* ---------- Lexikon-Leiste ---------- */
+  /* ---------- Lexikon-Leiste (groß) ---------- */
   renderLex() {
-    const c = document.createElement('canvas'); c.width = 900; c.height = 64; const g = c.getContext('2d');
-    g.beginPath(); rr(g, 3, 3, 894, 58, 29); g.fillStyle = 'rgba(43,29,58,0.62)'; g.fill(); g.lineWidth = 4; g.strokeStyle = OUTLINE; g.stroke();
-    const n = Coll.discovered();
-    drawText(g, `LEXIKON ${n}/10`, 24, 33, { size: 24, align: 'left', color: '#ffe680', strokeWidth: 5, drop: false });
+    const c = document.createElement('canvas'); c.width = 900; c.height = 80; const g = c.getContext('2d');
+    g.beginPath(); rr(g, 3, 3, 894, 74, 37); g.fillStyle = 'rgba(43,29,58,0.7)'; g.fill(); g.lineWidth = 5; g.strokeStyle = OUTLINE; g.stroke();
+    drawText(g, `📖 ${Coll.discovered()}/10`, 20, 42, { size: 34, align: 'left', color: '#ffe680', strokeWidth: 7, drop: false });
     SPECIES.forEach((s, i) => {
-      const found = !!Coll.lexikon[s.key];
-      const x = 222 + i * 66;
-      g.beginPath(); g.arc(x + 30, 32, 27, 0, TAU); g.fillStyle = found ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.18)'; g.fill();
-      g.globalAlpha = found ? 1 : 0.75; g.drawImage(this.icon(s.key, !found), x, 0, 60, 60); g.globalAlpha = 1;
-      if (!found) drawText(g, '?', x + 30, 34, { size: 26, color: '#c9c0f0', strokeWidth: 5, drop: false });
+      const found = !!Coll.lexikon[s.key], x = 172 + i * 72;
+      g.beginPath(); g.arc(x + 35, 40, 33, 0, TAU); g.fillStyle = found ? 'rgba(255,255,255,0.24)' : 'rgba(0,0,0,0.2)'; g.fill();
+      g.globalAlpha = found ? 1 : 0.75; g.drawImage(this.icon(s.key, !found), x + 2, 5, 66, 66); g.globalAlpha = 1;
+      if (!found) drawText(g, '?', x + 35, 43, { size: 32, color: '#c9c0f0', strokeWidth: 6, drop: false });
     });
     return c;
   },
   drawLex(ctx) {
     if (this.lexDirty || !this.lexImg) { this.lexImg = this.renderLex(); this.lexDirty = false; }
-    ctx.drawImage(this.lexImg, CONFIG.layout.centerX - 450, 394);
+    ctx.drawImage(this.lexImg, CONFIG.layout.centerX - 450, 420);
   },
 
-  /* ---------- Info-Banner "So geht's" alle ~45 s ---------- */
+  /* ---------- Banner-Platz (y 512–624): Mission hat Vorrang vor "So geht's" ---------- */
+  bannerBox(ctx, cx, y, w, h, fill, stroke, tag, tagCol) {
+    this.pill(ctx, cx - w / 2, y, w, h, fill, stroke, 6);
+    if (tag) {
+      const tw = measureText(ctx, tag, 26) + 30;
+      ctx.beginPath(); rr(ctx, cx - w / 2 + 34, y - 18, tw, 38, 19); ctx.fillStyle = tagCol; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = OUTLINE; ctx.stroke();
+      drawText(ctx, tag, cx - w / 2 + 34 + tw / 2, y + 1, { size: 26, color: OUTLINE, stroke: false });
+    }
+  },
   drawInfo(ctx, t) {
-    if (Game.phase === 'reveal') {                      // nicht hinter der Schlüpf-Karte hervorlugen → danach zeigen
+    if (Game.phase === 'reveal' || Missions.active || Missions.result) {     // Karte/Mission haben Vorrang → danach zeigen
       if (t > this.infoNext - 1) this.infoNext = t + 1;
       if (t - this.infoStart < CONFIG.infoBanner.showSec) this.infoStart = -99;
       return;
@@ -2540,16 +2845,61 @@ const HUD = {
     const k = t - this.infoStart, dur = CONFIG.infoBanner.showSec;
     if (k < 0 || k > dur) return;
     const inK = easeOutBack(clamp(k / 0.5, 0, 1)), outK = clamp((dur - k) / 0.4, 0, 1);
-    const text = Game.mode === 'duel' ? "So geht's: 1 oder 2 = Team wählen · Kommentar = Stoß · Likes = Wackeln"
-      : "So geht's: Kommentar = Stoß · Likes = Wackeln · Follow = Riesenriss";
-    const x = lerp(-500, CONFIG.layout.centerX, inK);
+    const lines = Game.mode === 'duel'
+      ? ['💬 Schreib 1 oder 2 = Team wählen', '💬 Kommentar = Stoß   ❤️ Likes = Wackeln']
+      : ['💬 Kommentar = Stoß   ❤️ Likes = Wackeln', '⭐ Follow = Riesenriss   📣 Teilen = Extra-Stoß'];
+    const cx = lerp(-520, CONFIG.layout.centerX, inK);
     ctx.save(); ctx.globalAlpha = outK;
-    this.pill(ctx, x - 445, 470, 890, 64, '#2b1d3a', '#ffe14d', 5);
-    drawText(ctx, text, x, 503, { size: 34, maxWidth: 850, color: '#ffffff', strokeWidth: 6, drop: false });
+    this.bannerBox(ctx, cx, 516, 900, 112, '#2b1d3a', '#ffe14d', "SO GEHT'S", '#ffe14d');
+    lines.forEach((l, i) => drawText(ctx, l, cx, 552 + i * 46, { size: 38, maxWidth: 860, color: '#ffffff', strokeWidth: 7, drop: false }));
     ctx.restore();
   },
+  drawMission(ctx, t) {
+    const m = Missions.active, res = Missions.result, cx = CONFIG.layout.centerX;
+    if (m) {
+      const k = m.t, inK = easeOutBack(clamp(k / 0.45, 0, 1)), left = Math.max(0, m.dur - m.t);
+      const urgent = left < 6;
+      ctx.save(); ctx.translate(cx, 572); ctx.scale(inK, inK); ctx.translate(-cx, -572);
+      this.bannerBox(ctx, cx, 516, 900, 112, urgent && Math.sin(t * 10) > 0 ? '#5a1d3a' : '#3a1f66', '#ffcf3a', '🎯 MISSION', '#ffcf3a');
+      drawText(ctx, `${m.icon} ${m.label}`, cx, 552, { size: 40, maxWidth: 860, color: '#ffffff', strokeWidth: 8, drop: false });
+      const bw = 560, bx = cx - 330, by = 578, bh = 34, p = clamp(m.got / m.target, 0, 1);
+      ctx.beginPath(); rr(ctx, bx, by, bw, bh, bh / 2); ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill();
+      if (p > 0) { ctx.save(); ctx.beginPath(); rr(ctx, bx, by, bw, bh, bh / 2); ctx.clip(); const g = ctx.createLinearGradient(bx, 0, bx + bw, 0); g.addColorStop(0, '#7bd35b'); g.addColorStop(1, '#ffe14d'); ctx.fillStyle = g; ctx.fillRect(bx, by, bw * p, bh); ctx.restore(); }
+      ctx.lineWidth = 4; ctx.strokeStyle = OUTLINE; ctx.beginPath(); rr(ctx, bx, by, bw, bh, bh / 2); ctx.stroke();
+      drawText(ctx, `${Math.min(m.got, m.target)} / ${m.target}`, bx + bw / 2, by + bh / 2 + 1, { size: 28, strokeWidth: 6, drop: false });
+      drawText(ctx, `⏱ ${Math.ceil(left)} s`, bx + bw + 90, by + bh / 2 + 1, { size: 32, color: urgent ? '#ff8a8a' : '#ffe680', strokeWidth: 7, drop: false });
+      ctx.restore();
+    } else if (res) {
+      const k = res.t, a = clamp((res.life - k) / 0.4, 0, 1), s = easeOutBack(clamp(k / 0.35, 0, 1));
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(cx, 572); ctx.scale(s, s); ctx.translate(-cx, -572);
+      this.bannerBox(ctx, cx, 516, 900, 112, res.ok ? '#1f5a2a' : '#4a2a3a', res.ok ? '#7bd35b' : '#ff9d8a', null);
+      drawText(ctx, res.ok ? '✅ MISSION GESCHAFFT!' : '⏱ Knapp verpasst!', cx, 552, { size: 46, color: res.ok ? '#bfffb0' : '#ffd0c8', strokeWidth: 9, drop: false });
+      drawText(ctx, res.ok ? '💥 MEGA-RISS fürs Ei!' : 'Die nächste Mission kommt bald …', cx, 598, { size: 32, maxWidth: 860, color: '#ffffff', strokeWidth: 7, drop: false });
+      ctx.restore();
+    }
+  },
 
-  /* ---------- Top-5 "Beste Knacker" (wechselt: Ei / heute / gesamt) ---------- */
+  /* ---------- Hype-Leiste (rechts neben dem Ei) ---------- */
+  drawHype(ctx, t) {
+    if (!CONFIG.hype.enabled) return;
+    const x = 884, y0 = 712, w = 48, h = 320, on = Hype.active > 0;
+    const glow = on ? 0.6 + Math.sin(t * 12) * 0.3 : Hype.value * 0.5;
+    if (glow > 0.05) { ctx.globalAlpha = glow; ctx.drawImage(softBlob('#ff7a2f'), x - 50, y0 - 40, w + 100, h + 80); ctx.globalAlpha = 1; }
+    ctx.beginPath(); rr(ctx, x, y0, w, h, w / 2); ctx.fillStyle = 'rgba(43,29,58,0.85)'; ctx.fill();
+    const fh = h * clamp(Hype.value, 0, 1);
+    if (fh > 1) {
+      ctx.save(); ctx.beginPath(); rr(ctx, x, y0, w, h, w / 2); ctx.clip();
+      const g = ctx.createLinearGradient(0, y0 + h, 0, y0); g.addColorStop(0, '#ffe14d'); g.addColorStop(0.6, '#ff9f45'); g.addColorStop(1, '#ff3d6e');
+      ctx.fillStyle = g; ctx.fillRect(x, y0 + h - fh, w, fh); ctx.restore();
+    }
+    ctx.lineWidth = 6; ctx.strokeStyle = on ? '#ffe14d' : OUTLINE; ctx.beginPath(); rr(ctx, x, y0, w, h, w / 2); ctx.stroke();
+    'HYPE'.split('').forEach((ch, i) => drawText(ctx, ch, x + w / 2, y0 + 56 + i * 58, { size: 34, strokeWidth: 7, drop: false, color: '#ffffff' }));
+    const fs = 46 + (on ? Math.sin(t * 14) * 6 : 0);
+    drawText(ctx, '🔥', x + w / 2, y0 - 32, { size: fs });
+    if (on) drawText(ctx, `x${CONFIG.hype.multiplier}`, x + w / 2, y0 + h + 34, { size: 40, color: '#ffe14d', strokeWidth: 8 });
+  },
+
+  /* ---------- Top-5 "Beste Knacker" (groß; wechselt: Ei / heute / gesamt) ---------- */
   drawBoard(ctx, t) {
     if (Game.mode === 'duel' || Game.phase === 'reveal') return;
     const kinds = ['egg', 'today', 'all'], titles = { egg: 'dieses Ei', today: 'heute', all: 'gesamt' };
@@ -2558,37 +2908,38 @@ const HUD = {
     if (Game.boardDirty || !this.board.img || t - (this.board.at || 0) > 1) {
       Game.boardDirty = false; this.board.at = t;
       const rows = Board.top(kind, 5);
-      const sig = kind + (CONFIG.avatars.enabled ? 'A' : '') + rows.map(r => { const u = Users.map.get(r.id); return r.name + Math.round(r.pts) + (u && Avatars.get(u) ? '*' : ''); }).join('|');
-      if (sig !== this.board.sig) { this.board.sig = sig; this.board.img = this.renderBoard(titles[kind], rows); }
+      const sig = kind + (CONFIG.avatars.enabled ? 'A' : '') + [...Game.kings].join(',') + rows.map(r => { const u = Users.map.get(r.id); return r.name + Math.round(r.pts) + (u && Avatars.get(u) ? '*' : ''); }).join('|');
+      if (sig !== this.board.sig) { this.board.sig = sig; this.board.img = this.renderBoard(titles[kind], rows, kind); }
     }
-    ctx.drawImage(this.board.img, 20, 610 + LAND_DY / 2);
+    ctx.drawImage(this.board.img, 12, 632);
   },
-  renderBoard(title, rows) {
-    const c = document.createElement('canvas'); c.width = 290; c.height = 330; const g = c.getContext('2d');
-    g.beginPath(); rr(g, 4, 4, 282, 322, 24); g.fillStyle = 'rgba(43,29,58,0.66)'; g.fill(); g.lineWidth = 5; g.strokeStyle = OUTLINE; g.stroke();
-    drawText(g, '🏆 Beste Knacker', 145, 34, { size: 28, color: '#ffe680', strokeWidth: 6, maxWidth: 260, drop: false });
-    drawText(g, title, 145, 68, { size: 22, color: '#9fe7ff', strokeWidth: 5, drop: false });
-    if (!rows.length) { drawText(g, 'Noch niemand –', 145, 160, { size: 24, strokeWidth: 5, drop: false }); drawText(g, 'schreib was!', 145, 194, { size: 24, strokeWidth: 5, drop: false }); return c; }
+  renderBoard(title, rows, kind) {
+    const W = 364, H = 390;
+    const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
+    g.beginPath(); rr(g, 4, 4, W - 8, H - 8, 26); g.fillStyle = 'rgba(43,29,58,0.74)'; g.fill(); g.lineWidth = 6; g.strokeStyle = OUTLINE; g.stroke();
+    drawText(g, '🏆 Beste Knacker', W / 2, 34, { size: 36, color: '#ffe680', strokeWidth: 7, maxWidth: W - 30, drop: false });
+    drawText(g, title, W / 2, 68, { size: 26, color: '#9fe7ff', strokeWidth: 6, drop: false });
+    if (!rows.length) { drawText(g, 'Noch niemand –', W / 2, 190, { size: 32, strokeWidth: 7, drop: false }); drawText(g, 'schreib was!', W / 2, 234, { size: 32, strokeWidth: 7, drop: false }); return c; }
     const medals = ['#ffd23f', '#d6dbe6', '#e09a5a', '#a7b4ff', '#a7b4ff'];
     rows.forEach((r, i) => {
-      const y = 112 + i * 47, u = Users.map.get(r.id);
+      const y = 112 + i * 62, u = Users.map.get(r.id);
+      if (i % 2 === 0) { g.fillStyle = 'rgba(255,255,255,0.05)'; g.fillRect(10, y - 30, W - 20, 60); }
       if (CONFIG.avatars.enabled && u) {
-        // Profilbild (oder Buchstabe) mit Rang-Plakette
-        Avatars.draw(g, u, 30, y, 19, medals[i]);
-        g.beginPath(); g.arc(45, y + 13, 10, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 2.5; g.strokeStyle = OUTLINE; g.stroke();
-        drawText(g, String(i + 1), 45, y + 14, { size: 14, color: OUTLINE, stroke: false });
+        Avatars.draw(g, u, 40, y, 26, medals[i]);
+        g.beginPath(); g.arc(60, y + 18, 13, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 3; g.strokeStyle = OUTLINE; g.stroke();
+        drawText(g, String(i + 1), 60, y + 19, { size: 17, color: OUTLINE, stroke: false });
       } else {
-        g.beginPath(); g.arc(30, y, 16, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 3; g.strokeStyle = OUTLINE; g.stroke();
-        drawText(g, String(i + 1), 30, y + 1, { size: 20, color: OUTLINE, stroke: false });
+        g.beginPath(); g.arc(40, y, 22, 0, TAU); g.fillStyle = medals[i]; g.fill(); g.lineWidth = 4; g.strokeStyle = OUTLINE; g.stroke();
+        drawText(g, String(i + 1), 40, y + 1, { size: 26, color: OUTLINE, stroke: false });
       }
-      const nx = CONFIG.avatars.enabled && u ? 62 : 54;
-      drawText(g, r.name, nx, y, { size: 24, align: 'left', maxWidth: 214 - nx, strokeWidth: 5, drop: false });
-      drawText(g, String(Math.max(1, Math.round(r.pts))), 272, y, { size: 24, align: 'right', color: '#ffe680', strokeWidth: 5, drop: false });
+      const king = kind === 'egg' && i === 0 && Game.kings.has(r.id) ? '👑 ' : '';
+      drawText(g, king + r.name, 80, y - 9, { size: 36, align: 'left', maxWidth: W - 94, strokeWidth: 7, drop: false });
+      drawText(g, `${Math.max(1, Math.round(r.pts))} Pkt.`, 80, y + 20, { size: 24, align: 'left', color: '#ffe680', strokeWidth: 5, drop: false });
     });
     return c;
   },
 
-  /* ---------- Duell-Beschriftung über den Eiern ---------- */
+  /* ---------- Duell-Beschriftung über den Eiern (groß) ---------- */
   drawDuelLabels(ctx, t) {
     if (Game.mode !== 'duel') return;
     const xs = Game.eggXs('duel');
@@ -2601,10 +2952,10 @@ const HUD = {
       const e = Game.eggs.find(e => e.team === team);
       if (e && e.state === 'roll') return;
       const x = e ? e.x : xs[i], col = team === 1 ? '#ff8a5c' : '#5cc8ff';
-      const y = CONFIG.layout.groundY - 388 + Math.sin(t * 3 + i) * 4;
-      ctx.beginPath(); ctx.arc(x, y, 44, 0, TAU); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 7; ctx.strokeStyle = OUTLINE; ctx.stroke();
-      drawText(ctx, String(team), x, y + 3, { size: 62, strokeWidth: 9 });
-      drawText(ctx, `${this._teams[team]} im Team`, x + (i ? 1 : -1) * 0, y + 62, { size: 24, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 6 });
+      const y = CONFIG.layout.groundY - 412 + Math.sin(t * 3 + i) * 4;
+      ctx.beginPath(); ctx.arc(x, y, 54, 0, TAU); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 8; ctx.strokeStyle = OUTLINE; ctx.stroke();
+      drawText(ctx, String(team), x, y + 4, { size: 78, strokeWidth: 11 });
+      drawText(ctx, `${this._teams[team]} im Team`, x, y + 76, { size: 34, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 8 });
     });
   },
 
@@ -2614,27 +2965,60 @@ const HUD = {
       const k = p.t / p.life;
       const a = k < 0.12 ? k / 0.12 : k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
       const s = k < 0.15 ? easeOutBack(k / 0.15) : 1;
-      drawText(ctx, p.text, clamp(p.x, 110, 860), p.y - 70 * easeOutCubic(k), { size: p.size * s, color: p.color, alpha: a, strokeWidth: 7 });
+      drawText(ctx, p.text, clamp(p.x, 130, 860), p.y - 80 * easeOutCubic(k), { size: p.size * s, color: p.color, alpha: a, strokeWidth: Math.max(7, p.size * 0.2) });
     }
   },
 
-  /* ---------- Einblendungen (Follow-Dank, Begrüßung, Meilensteine) ---------- */
+  /* ---------- Große Ansagen über dem Ei (50 %, Fast geschafft, Hype …) ---------- */
+  drawCallouts(ctx) {
+    for (const c of Game.callouts) {
+      const k = c.t / c.life, a = k > 0.75 ? 1 - (k - 0.75) / 0.25 : 1;
+      const s = easeOutBack(clamp(c.t / 0.35, 0, 1)) * (1 + Math.sin(c.t * 10) * 0.02);
+      ctx.save(); ctx.translate(c.x, c.y - 50 * easeOutCubic(k)); ctx.scale(s, s);
+      drawText(ctx, c.text, 0, 0, { size: c.size, color: c.color, alpha: a, maxWidth: 900, strokeWidth: Math.max(10, c.size * 0.17) });
+      ctx.restore();
+    }
+  },
+
+  /* ---------- Sprechblase des Eis ---------- */
+  drawBubble(ctx, t) {
+    const b = Bubbles.cur; if (!b || !CONFIG.bubbles.enabled) return;
+    const e = b.egg && Game.eggs.includes(b.egg) ? b.egg : Game.eggs[0];
+    if (!e || (e.state !== 'idle' && e.state !== 'drop')) return;
+    const k = b.t, a = clamp((b.life - k) / 0.3, 0, 1), s = easeOutBack(clamp(k / 0.3, 0, 1));
+    const lines = wrapText(ctx, b.text, 34, 300, 800);
+    const w = Math.min(340, Math.max(...lines.map(l => measureText(ctx, l, 34, 800))) + 44), h = lines.length * 40 + 30;
+    const topY = e.groundY - e.ry * 1.95 - e.h;
+    let bx = clamp(e.x + e.rx * 0.55, 380 + w / 2, 870 - w / 2), by = Math.max(topY - 30, 660 + h / 2);
+    if (Game.mode === 'duel' && e.team === 1) bx = clamp(e.x - e.rx * 0.2, 40 + w / 2, 870 - w / 2);
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(bx, by); ctx.scale(s, s); ctx.rotate(Math.sin(t * 2) * 0.015);
+    ctx.beginPath(); rr(ctx, -w / 2, -h / 2, w, h, 22);
+    ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.lineWidth = 6; ctx.strokeStyle = OUTLINE; ctx.stroke();
+    const tx = clamp(e.x - bx, -w / 2 + 30, w / 2 - 30);                  // Spitze zeigt zum Ei
+    ctx.beginPath(); ctx.moveTo(tx - 18, h / 2 - 3); ctx.lineTo(tx - 30, h / 2 + 34); ctx.lineTo(tx + 12, h / 2 - 3); ctx.closePath();
+    ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.stroke();
+    ctx.fillRect(tx - 16, h / 2 - 8, 26, 8);
+    lines.forEach((l, i) => drawText(ctx, l, 0, -h / 2 + 35 + i * 40, { size: 34, color: OUTLINE, stroke: false, weight: 800 }));
+    ctx.restore();
+  },
+
+  /* ---------- Einblendungen (Follow-Dank, Begrüßung, Meilensteine) – groß ---------- */
   drawToasts(ctx) {
     // Spur direkt über dem unteren Drittel (Chat), unter Ei & Helfern
-    let y = Math.min(CONFIG.layout.safeBottom - 36, CONFIG.layout.groundY + 136);
+    let y = Math.min(CONFIG.layout.safeBottom - 46, CONFIG.layout.groundY + 124);
     for (const tt of Game.toasts) {
       const inK = clamp(tt.t / 0.3, 0, 1), outK = clamp((tt.life - tt.t) / 0.35, 0, 1);
       const text = (tt.icon ? tt.icon + ' ' : '') + tt.text;
-      const size = tt.prio >= 3 ? 38 : 34;
+      const size = tt.prio >= 3 ? 46 : 42;
       const u = CONFIG.avatars.enabled && tt.uid != null ? Users.map.get(tt.uid) : null;
-      const av = u ? 58 : 0;                                   // Platz fürs Profilbild links
-      const w = Math.min(890, measureText(ctx, text, size) + 70 + av);
+      const av = u ? 74 : 0;                                   // Platz fürs Profilbild links
+      const w = Math.min(920, measureText(ctx, text, size) + 80 + av);
       ctx.save(); ctx.globalAlpha = outK; ctx.translate(CONFIG.layout.centerX, y); const s = easeOutBack(inK); ctx.scale(s, s);
-      this.pill(ctx, -w / 2, -34, w, 68, 'rgba(43,29,58,0.88)', tt.color, 6);
-      if (u) Avatars.draw(ctx, u, -w / 2 + 38, 0, 25, tt.color);
-      drawText(ctx, text, av / 2, 1, { size, maxWidth: 850 - av, color: '#ffffff', strokeWidth: 7, drop: false });
+      this.pill(ctx, -w / 2, -42, w, 84, 'rgba(43,29,58,0.9)', tt.color, 7);
+      if (u) Avatars.draw(ctx, u, -w / 2 + 48, 0, 32, tt.color);
+      drawText(ctx, text, av / 2, 2, { size, maxWidth: 880 - av, color: '#ffffff', strokeWidth: 8, drop: false });
       ctx.restore();
-      y -= 80;
+      y -= 96;
     }
   },
 
@@ -2677,7 +3061,7 @@ const HUD = {
     const info = Game.hatchInfo; if (!info || Game.phase !== 'reveal') return;
     const k = Game.phaseT, dur = CONFIG.reveal.cardSec;
     const inK = easeOutBack(clamp(k / 0.45, 0, 1)), outK = clamp((dur - k) / 0.35, 0, 1);
-    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 775 + LAND_DY / 2, W = 850, H = 640;
+    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 790 + LAND_DY / 2, W = 900, H = 690;
     ctx.save(); ctx.globalAlpha = outK; ctx.translate(cx, cy); ctx.scale(inK, inK);
     // Strahlen hinter der Karte
     ctx.save(); ctx.rotate(t * 0.4); ctx.fillStyle = R.glow ? R.glow : 'rgba(255,255,255,0.6)'; ctx.globalAlpha *= R.glow ? 0.45 : 0.25;
@@ -2686,35 +3070,35 @@ const HUD = {
     ctx.beginPath(); rr(ctx, -W / 2, -H / 2, W, H, 40); ctx.fillStyle = R.color; ctx.fill(); ctx.lineWidth = 10; ctx.strokeStyle = OUTLINE; ctx.stroke();
     ctx.beginPath(); rr(ctx, -W / 2 + 18, -H / 2 + 74, W - 36, H - 92, 28); ctx.fillStyle = '#fffaf0'; ctx.fill();
     const stars = '★'.repeat(R.stars);
-    drawText(ctx, `${stars} ${R.label} ${stars}`, 0, -H / 2 + 40, { size: 44, color: '#ffffff', strokeWidth: 9 });
-    let y = -H / 2 + 122;
-    if (info.team) { drawText(ctx, `TEAM ${info.team} GEWINNT!`, 0, y, { size: 48, color: info.team === 1 ? '#ff8a5c' : '#5cc8ff', strokeWidth: 9 }); y += 56; }
-    drawText(ctx, info.speciesName, 0, y, { size: 62, color: R.dark, strokeWidth: 0, stroke: false });
+    drawText(ctx, `${stars} ${R.label} ${stars}`, 0, -H / 2 + 40, { size: 50, color: '#ffffff', strokeWidth: 10 });
+    let y = -H / 2 + 128;
+    if (info.team) { drawText(ctx, `TEAM ${info.team} GEWINNT!`, 0, y, { size: 54, color: info.team === 1 ? '#ff8a5c' : '#5cc8ff', strokeWidth: 9 }); y += 58; }
+    drawText(ctx, info.speciesName, 0, y, { size: 74, color: R.dark, strokeWidth: 0, stroke: false });
     const nu = CONFIG.avatars.enabled && info.namerId != null ? Users.map.get(info.namerId) : null;
     if (nu) {                                                  // Profilbild des Namensgebers neben dem Namen
-      const label = `„${info.name}“`, r = 38, gap = 14;
-      const tw = Math.min(760 - 2 * r - gap, measureText(ctx, label, 50));
+      const label = `„${info.name}“`, r = 44, gap = 16;
+      const tw = Math.min(800 - 2 * r - gap, measureText(ctx, label, 58));
       const x0 = -(2 * r + gap + tw) / 2;
-      Avatars.draw(ctx, nu, x0 + r, y + 62, r, R.dark);
-      drawText(ctx, label, x0 + 2 * r + gap + tw / 2, y + 62, { size: 50, maxWidth: 760 - 2 * r - gap, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
-    } else drawText(ctx, `„${info.name}“`, 0, y + 62, { size: 50, maxWidth: 760, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
+      Avatars.draw(ctx, nu, x0 + r, y + 70, r, R.dark);
+      drawText(ctx, label, x0 + 2 * r + gap + tw / 2, y + 70, { size: 58, maxWidth: 800 - 2 * r - gap, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
+    } else drawText(ctx, `„${info.name}“`, 0, y + 70, { size: 58, maxWidth: 800, color: '#ffffff', strokeColor: OUTLINE, strokeWidth: 10 });
     // Dino (kleine Arten werden größer gezeichnet)
-    const dinoH = info.team ? 190 : 220, groundY = y + 62 + 37 + dinoH, sc = Math.min(1.25, dinoH / SPECIES_H[info.species]);
+    const dinoH = info.team ? 190 : 220, groundY = y + 70 + 42 + dinoH, sc = Math.min(1.25, dinoH / SPECIES_H[info.species]);
     if (R.glow) { const gs = 230 + Math.sin(t * 4) * 15; ctx.globalAlpha *= 0.8; ctx.drawImage(softBlob(R.glow), -gs, groundY - dinoH / 2 - gs, gs * 2, gs * 2); ctx.globalAlpha = outK; }
     ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.beginPath(); ctx.ellipse(0, groundY + 4, 150, 16, 0, 0, TAU); ctx.fill();
     const pal = PALETTES[info.rarity][info.palIdx % PALETTES[info.rarity].length];
     Art.drawDino(ctx, info.species, 10, groundY - Math.abs(Math.sin(t * 4)) * 10, { pal, t, walk: 0, face: 1, scale: sc, seed: info.seed, blink: (t % 3) < 0.12 ? 1 : 0 });
-    drawText(ctx, 'ist geschlüpft!', 0, groundY + 44, { size: 40, color: OUTLINE, stroke: false });
+    drawText(ctx, 'ist geschlüpft!', 0, groundY + 46, { size: 46, color: OUTLINE, stroke: false });
     // Helfer bzw. Team
     if (info.team) {
       const names = info.members.slice(0, 8).join(' · ') + (info.members.length > 8 ? ` · +${info.members.length - 8}` : '');
-      const lines = wrapText(ctx, names || 'Danke an alle!', 28, 760, 800);
-      lines.slice(0, 2).forEach((l, i) => drawText(ctx, l, 0, groundY + 88 + i * 34, { size: 28, color: '#4a3a6a', stroke: false, weight: 800 }));
+      const lines = wrapText(ctx, names || 'Danke an alle!', 32, 800, 800);
+      lines.slice(0, 2).forEach((l, i) => drawText(ctx, l, 0, groundY + 96 + i * 38, { size: 32, color: '#4a3a6a', stroke: false, weight: 800 }));
     } else if (info.top3.length) {
       const medal = ['🥇', '🥈', '🥉'];
-      drawText(ctx, 'Top-Helfer', 0, groundY + 88, { size: 26, color: '#8a7aa8', stroke: false, weight: 800 });
+      drawText(ctx, 'Top-Helfer', 0, groundY + 94, { size: 30, color: '#8a7aa8', stroke: false, weight: 800 });
       const parts = info.top3.map((h, i) => `${medal[i]} ${h.name}`);
-      drawText(ctx, parts.join('   '), 0, groundY + 124, { size: 30, maxWidth: 780, color: '#2b1d3a', stroke: false, weight: 800 });
+      drawText(ctx, parts.join('   '), 0, groundY + 136, { size: 36, maxWidth: 820, color: '#2b1d3a', stroke: false, weight: 800 });
     }
     ctx.restore();
   },
@@ -2722,7 +3106,7 @@ const HUD = {
   /* ---------- Einschlag-Text ---------- */
   drawImpactText(ctx, t) {
     if (Game.phase !== 'impact' || Game.phaseT < 1.0) return;
-    const k = Game.phaseT - 1.0, cx = CONFIG.layout.centerX, out = clamp((5.2 - Game.phaseT) / 0.4, 0, 1);
+    const k = Game.phaseT - 1.0, cx = clamp(Game.meteor && Game.meteor.tx || CONFIG.layout.eggX, 420, 620), out = clamp((5.2 - Game.phaseT) / 0.4, 0, 1);
     ctx.save(); ctx.globalAlpha = out;
     ctx.save(); ctx.translate(cx, 640 + LAND_DY); const s = easeOutBack(clamp(k / 0.4, 0, 1)) * (1 + Math.sin(t * 8) * 0.02); ctx.scale(s, s);
     drawText(ctx, 'BUMM!', 0, 0, { size: 160, color: '#ff8a3d', strokeWidth: 18 }); ctx.restore();
@@ -2785,8 +3169,11 @@ const HUD = {
     const hs = Game.helpers.slice().sort((a, b) => a.y - b.y);
     for (const h of hs) h.draw(ctx);
     const tn = now();
-    const tagged = Game.helpers.filter(h => tn < h.tagUntil && h.state !== 'leave').sort((a, b) => b.tagUntil - a.tagUntil).slice(0, 6).sort((a, b) => a.x - b.x);
-    tagged.forEach((h, i) => h.drawTag(ctx, (i % 2) * 30));
+    // Namensschilder: Könige immer, sonst die zuletzt aktiven – max. 6, versetzt
+    const tagged = Game.helpers.filter(h => h.state !== 'leave' && (Game.kings.has(h.uid) || tn < h.tagUntil))
+      .sort((a, b) => (Game.kings.has(b.uid) - Game.kings.has(a.uid)) || (b.tagUntil - a.tagUntil)).slice(0, 6).sort((a, b) => a.x - b.x);
+    tagged.forEach((h, i) => h.drawTag(ctx, (i % 2) * 36));
+    this.drawFlyHearts(ctx);
     FX.draw(ctx, 1);
     if (Game.meteor && Game.meteor.state === 'dive') World.drawMeteor(ctx, Game.meteor);
     World.drawFront(ctx);
@@ -2794,13 +3181,19 @@ const HUD = {
     this.drawPops(ctx);
     ctx.restore();
     if (Game.flash > 0.01) { ctx.globalAlpha = Math.min(1, Game.flash) * 0.85; ctx.fillStyle = Game.flashColor; ctx.fillRect(0, 0, 1080, 1920); ctx.globalAlpha = 1; }
+    // HYPE: Bildrand glüht
+    if (Hype.active > 0) { const a = 0.35 + Math.sin(t * 10) * 0.15; const g = ctx.createRadialGradient(540, 960, 600, 540, 960, 1150); g.addColorStop(0, 'rgba(255,120,40,0)'); g.addColorStop(1, `rgba(255,110,30,${a})`); ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1920); }
     // HUD
     this.drawCTA(ctx, t);
     this.drawStatusRow(ctx, t);
     this.drawLex(ctx);
     this.drawInfo(ctx, t);
+    this.drawMission(ctx, t);
     this.drawBoard(ctx, t);
+    this.drawHype(ctx, t);
     this.drawDuelLabels(ctx, t);
+    this.drawBubble(ctx, t);
+    this.drawCallouts(ctx);
     this.drawAnnounce(ctx, t);
     this.drawImpactText(ctx, t);
     this.drawCard(ctx, t);
@@ -2808,11 +3201,26 @@ const HUD = {
     this.drawPause(ctx, t);
     this.drawHints(ctx, t);
   },
+  /* Like-Herzen fliegen auf einer Kurve zum Ei */
+  drawFlyHearts(ctx) {
+    for (const h of Game.flyHearts) {
+      if (h.t < 0) continue;
+      const k = easeInOutSine(clamp(h.t / h.dur, 0, 1)), u = 1 - k;
+      const x = u * u * h.x0 + 2 * u * k * h.cx + k * k * h.x1, y = u * u * h.y0 + 2 * u * k * h.cy + k * k * h.y1;
+      const s = h.s * (0.7 + Math.sin(k * Math.PI) * 0.5) / 20;
+      ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(Math.sin(h.t * 8) * 0.2);
+      ctx.beginPath(); ctx.moveTo(0, 7); ctx.bezierCurveTo(-24, -8, -11, -26, 0, -12); ctx.bezierCurveTo(11, -26, 24, -8, 0, 7);
+      ctx.fillStyle = h.col; ctx.fill(); ctx.lineWidth = 3.5; ctx.strokeStyle = OUTLINE; ctx.stroke();
+      ctx.restore();
+    }
+  },
   drawEgg(ctx, e, t) {
     if (e.state === 'gone') return;
     const cy = e.ry * 0.95;
     ctx.save();
     ctx.globalAlpha = e.alpha;
+    // ab 90 %: pulsierendes Glühen ("gleich schlüpft's!")
+    if (e.state === 'idle' && e.progress >= 0.9) { const gs = e.rx * 2.2 * (1 + Math.sin(t * 8) * 0.08); ctx.globalAlpha = 0.6 * e.alpha; ctx.drawImage(softBlob('#ffe27a'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.globalAlpha = e.alpha; }
     if (e.boss && e.state !== 'burst') { const gs = e.rx * 2.1 * (1 + Math.sin(t * 3) * 0.05); ctx.globalAlpha = 0.55 * e.alpha; ctx.drawImage(softBlob('#b86bff'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.globalAlpha = e.alpha; }
     if (e.state === 'idle' || e.state === 'drop' || e.state === 'roll') {
       // Schatten
@@ -3128,7 +3536,7 @@ const Host = {
       eggs: e.map(x => ({ team: x.team, hp: Math.round(x.hp * 10) / 10, maxHp: x.maxHp, p: Math.round(x.progress * 100) })),
       helpers: Game.helpers.length, herd: World.herd.length, queue: EventQueue.q.length, fps: Math.round(Loop.fps),
       totals: Game.totals, avgHatch: Game.hatchTimes.length ? Math.round(Game.hatchTimes.reduce((a, b) => a + b, 0) / Game.hatchTimes.length) : null,
-      testViewers: TestSim.viewers, testActivity: TestSim.activity, config: CONFIG, storeOk: Store.ok, error: Host.lastError,
+      testViewers: TestSim.viewers, testActivity: TestSim.activity, hype: { value: Math.round(Hype.value * 100), active: Math.ceil(Hype.active), cooldown: Math.ceil(Hype.cooldown) }, mission: Missions.active ? { label: Missions.active.label, got: Missions.active.got, target: Missions.active.target, left: Math.ceil(Missions.active.dur - Missions.active.t) } : null, config: CONFIG, storeOk: Store.ok, error: Host.lastError,
       users: Users.recent(30).map(u => ({ id: u.id, raw: u.raw, name: u.name, filtered: u.filtered, muted: u.muted, pic: !!u.hasAvatar || (Net.testMode && String(u.id).startsWith('sim')), noPic: Persist.isNoPic(u.id) })),
       mutedList: Object.entries(Persist.muted).map(([id, n]) => ({ id, raw: n })),
     };
@@ -3168,6 +3576,9 @@ const SETTINGS_UI = [
   ['Rotation', [['rotation.normalsBeforeSpecial', 'Normale vor Spezial', 0, 10, 1], ['rotation.bossAnnounceSec', 'Boss-Ansage (s)', 5, 60, 1], ['rotation.bossEnabled', 'Boss-Ei aktiv', 'bool'], ['rotation.duelEnabled', 'Ei-Duell aktiv', 'bool']]],
   ['Ton', [['audio.master', 'Gesamt', 0, 1, 0.05], ['audio.sfx', 'Effekte', 0, 1, 0.05], ['audio.music', 'Musik', 0, 1, 0.05], ['audio.musicEnabled', 'Eigenmusik an', 'bool']]],
   ['Anzeige', [['infoBanner.everySec', 'Info-Banner alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool']]],
+  ['Action', [['missions.enabled', 'Mini-Missionen', 'bool'], ['missions.minGapSec', 'Mission frühestens alle (s)', 20, 300, 5], ['missions.maxGapSec', 'Mission spätestens alle (s)', 30, 400, 5], ['missions.rewardPct', 'Missions-Bonus (Anteil HP)', 0.05, 0.5, 0.01], ['missions.difficulty', 'Missions-Schwierigkeit', 0.4, 2, 0.05],
+    ['hype.enabled', 'Hype-Leiste', 'bool'], ['hype.durationSec', 'Hype-Dauer (s)', 5, 30, 1], ['hype.multiplier', 'Hype-Schaden ×', 1, 4, 0.5], ['bubbles.enabled', 'Sprechblasen des Eis', 'bool'],
+    ['miniEvents.minSec', 'Hintergrund-Ereignis ab (s)', 15, 300, 5], ['miniEvents.maxSec', '… bis (s)', 20, 400, 5]]],
 ];
 
 const Panel = {
@@ -3189,9 +3600,9 @@ const Panel = {
     h.push('<div class="status">' + ['bridge|Bridge', 'tiktok|TikTok', 'active|Aktive Nutzer (60 s)', 'ipm|Interaktionen/Min', 'time|Zeit bis Meteor', 'mode|Modus', 'hp|Ei-HP', 'next|Als Nächstes'].map(s => { const [k, l] = s.split('|'); return `<div class="stat" id="s_${k}"><div class="k">${l}</div><div class="v">–</div></div>`; }).join('') + '</div>');
     h.push('<div class="hint" id="pInfo"></div>');
     h.push('<h2>Steuerung</h2><div class="btns">' +
-      [['B', 'Boss-Ei als Nächstes'], ['D', 'Duell als Nächstes'], ['E', 'Zufallsereignis'], ['P', 'Pause-Screen'], ['M', 'Ton an/aus'], ['R', 'Ei neu starten']]
+      [['B', 'Boss-Ei als Nächstes'], ['D', 'Duell als Nächstes'], ['E', 'Zufallsereignis'], ['P', 'Pause-Screen'], ['M', 'Ton an/aus'], ['R', 'Ei neu starten'], ['N', '🎯 Mission starten'], ['X', '🔥 Hype starten']]
         .map(([k, l]) => `<button data-hot="${k}"><kbd>${k}</kbd>${l}</button>`).join('') + '</div>');
-    h.push('<div class="btns" style="margin-top:6px">' + [['rain', '🌧️ Regen'], ['shooting', '🌠 Sternschnuppe'], ['eruption', '🌋 Vulkan'], ['butterflies', '🦋 Schmetterlinge'], ['stumble', '🦕 Stolpern'], ['flyby', '🦅 Flugsaurier']].map(([k, l]) => `<button data-ev="${k}">${l}</button>`).join('') + '</div>');
+    h.push('<div class="btns" style="margin-top:6px">' + [['rain', '🌧️ Regen'], ['shooting', '🌠 Sternschnuppe'], ['eruption', '🌋 Vulkan'], ['butterflies', '🦋 Schmetterlinge'], ['stumble', '🦕 Stolpern'], ['flyby', '🦅 Flugsaurier'], ['parade', '🏃 Herden-Parade'], ['fireflies', '✨ Glühwürmchen']].map(([k, l]) => `<button data-ev="${k}">${l}</button>`).join('') + '</div>');
     if (!IS_PANEL) h.push('<div class="btns" style="margin-top:6px;grid-template-columns:1fr"><button data-act="window">↗️ Panel in eigenem Fenster öffnen (empfohlen im Stream)</button></div>');
     h.push('<pre id="pLog" class="hint" style="white-space:pre-wrap;min-height:1.2em;margin:6px 0 0"></pre>');
     h.push('<h2>Testmodus</h2><div class="hint" id="pTestInfo"></div>');
@@ -3217,7 +3628,7 @@ const Panel = {
       '<button data-act="export">⬇️ Spielstand (JSON)</button><button data-act="import">⬆️ Import (JSON)</button><button data-act="logcsv">📊 Log (CSV)</button>' +
       '<button data-act="logjson">📊 Log (JSON)</button><button data-act="resetAll" class="danger">Alles zurücksetzen</button></div><input type="file" id="pFile" accept=".json,application/json" style="display:none">');
     h.push('<div class="hint" id="pTotals" style="margin-top:8px"></div>');
-    h.push('<div class="hint" style="margin-top:14px">Tasten: <b>H</b> Panel · <b>B</b> Boss · <b>D</b> Duell · <b>E</b> Ereignis · <b>P</b> Pause · <b>M</b> Ton · <b>R</b> Ei neu · Test: <b>C L F S G 1 2</b></div>');
+    h.push('<div class="hint" style="margin-top:14px">Tasten: <b>H</b> Panel · <b>B</b> Boss · <b>D</b> Duell · <b>E</b> Ereignis · <b>P</b> Pause · <b>M</b> Ton · <b>R</b> Ei neu · <b>N</b> Mission · <b>X</b> Hype · Test: <b>C L F S G 1 2</b></div>');
     el.innerHTML = h.join('');
     // Ereignisse (Delegation)
     el.addEventListener('click', e => {
@@ -3280,6 +3691,7 @@ const Panel = {
     this.stat('hp', S.eggs.length ? S.eggs.map(e => `${Math.ceil(e.hp)}/${e.maxHp}`).join(' · ') : '–');
     this.stat('next', modeName[S.next] || S.next);
     el.querySelector('#pInfo').textContent = `Ei #${S.eggNumber} · Phase: ${phaseName[S.phase] || S.phase} · ${S.muted ? '🔇 Ton aus' : (S.audioReady ? '🔊 Ton an' : '🔇 Ton noch gesperrt (einmal ins Spiel klicken)')} · Helfer ${S.helpers} · Herde ${S.herd} · Queue ${S.queue} · ${S.fps} fps` +
+      (S.mission ? ` · 🎯 ${S.mission.got}/${S.mission.target} (${S.mission.left} s)` : '') + (S.hype ? (S.hype.active ? ` · 🔥 HYPE ${S.hype.active} s` : ` · Hype ${S.hype.value} %`) : '') +
       (tk.message ? ` · TikTok: ${tk.message}` : '') + (tk.viewers != null ? ` · Zuschauer ${tk.viewers}` : '') + (S.storeOk ? '' : ' · ⚠️ Speichern nicht möglich') + (S.error ? ' · Fehler: ' + S.error.slice(0, 120) : '');
     el.querySelector('#pTestInfo').textContent = S.testMode ? (S.forceTest ? 'Testmodus ist erzwungen.' : 'Testmodus aktiv (keine Bridge verbunden).') : 'Live-Modus: Events kommen von TikTok. Test-Tasten sind gesperrt.';
     el.querySelector('#bForce').classList.toggle('on', !!S.forceTest);
@@ -3337,7 +3749,7 @@ function onKey(e) {
   const k = e.key.length === 1 ? e.key.toUpperCase() : '';
   if (!k) return;
   if (k === 'H') { if (!IS_PANEL) Panel.toggle(); e.preventDefault(); return; }
-  if ('BDEPMR'.includes(k)) { Panel.send({ c: 'hotkey', k }); e.preventDefault(); return; }
+  if ('BDEPMRNX'.includes(k)) { Panel.send({ c: 'hotkey', k }); e.preventDefault(); return; }
   if ('CLFSG12'.includes(k)) { Panel.send({ c: 'test', k }); e.preventDefault(); }
 }
 
