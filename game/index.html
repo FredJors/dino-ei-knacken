@@ -298,31 +298,35 @@ const BLOCKLIST = [
   'arschloch', 'arschgeige', 'arschgesicht', 'fotze', 'hure', 'hurensohn', 'wichser', 'wichsen', 'ficken', 'fick',
   'schlampe', 'nutte', 'schwuchtel', 'spast', 'spasti', 'missgeburt', 'kanake', 'neger', 'judensau', 'heilhitler',
   'siegheil', 'hitler', 'nazi', 'porno', 'titten', 'muschi', 'pimmel', 'sperma', 'bumsen', 'drecksau', 'vergewaltig',
-  'kinderporn', 'pädo', 'paedo', 'pedo', 'nackt', 'selbstmord', 'behindert', 'mongo', 'votze', 'kotzbrocken',
+  'kinderporn', 'pädo', 'paedo', 'pedo', 'nacktbild', 'nacktfoto', 'selbstmord', 'behindert', 'mongo', 'votze', 'kotzbrocken',
   // Englisch
   'fuck', 'fuk', 'fck', 'shit', 'bitch', 'biatch', 'cunt', 'dickhead', 'dickpic', 'bigdick', 'cocksucker', 'pussy',
   'whore', 'slut', 'rapist', 'retard', 'faggot', 'fagg', 'nigg', 'nigga', 'kkk', 'porn', 'xxx', 'nude', 'boob', 'tits',
-  'jizz', 'dildo', 'milf', 'hentai', 'nsfw', 'onlyfans', 'suicide', 'killyourself', 'isis', 'sex', 'penis', 'vagina',
-  'wanker', 'twat', 'bastard', 'motherf', 'asshole', '1488', 'whitepower',
+  'jizz', 'dildo', 'milf', 'hentai', 'nsfw', 'onlyfans', 'suicide', 'killyourself', 'isis', 'sexy', 'sexxx', 'sexting',
+  'sexcam', 'penis', 'vagina', 'wanker', 'twat', 'bastard', 'motherf', 'asshole', '1488', 'whitepower',
+  // Hinweis: sehr kurze Wörter (z. B. "sex", "nackt") erzeugen Fehltreffer wie "mats.exe" oder "knackt" – bewusst weggelassen.
 ];
 const NameFilter = {
   leet: { '0': 'o', '1': 'i', '2': 'z', '3': 'e', '4': 'a', '5': 's', '6': 'g', '7': 't', '8': 'b', '9': 'g', '@': 'a', '$': 's', '!': 'i', '|': 'i', '€': 'e' },
   _list: null,
   norm(s) { return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); },
   plain(s) { return this.norm(s).replace(/[^a-z0-9]/g, ''); },
-  leetify(s) { return this.norm(s).replace(/[0-9@$!|€]/g, c => this.leet[c] || c).replace(/[^a-z0-9]/g, ''); },
+  /* zwei Varianten: "1" und "|" können für i ODER l stehen (sch1ampe → schlampe) */
+  leetify(s, oneIsL) { return this.norm(s).replace(/[0-9@$!|€]/g, c => (oneIsL && (c === '1' || c === '|')) ? 'l' : (this.leet[c] || c)).replace(/[^a-z0-9]/g, ''); },
   collapse(s) { return s.replace(/(.)\1+/g, '$1'); },
   list() {
     if (!this._list) {
       const all = BLOCKLIST.concat(CONFIG.filter.extraWords || []);
-      this._list = all.map(w => this.plain(w)).filter(w => w.length >= 3);
+      // c = Wort ohne Buchstaben-Wiederholungen ("fuuuck" → "fuck"); nur ab 4 Zeichen nutzen,
+      // sonst würde z. B. "xxx" → "x" jeden Namen mit einem x treffen.
+      this._list = all.map(w => this.plain(w)).filter(w => w.length >= 3).map(w => ({ w, c: this.collapse(w) }));
     }
     return this._list;
   },
   invalidate() { this._list = null; },
   isBad(name) {
-    const p = this.plain(name), l = this.leetify(name), lc = this.collapse(l);
-    return this.list().some(w => p.includes(w) || l.includes(w) || lc.includes(this.collapse(w)));
+    const p = this.plain(name), l = this.leetify(name), l2 = this.leetify(name, true), lc = this.collapse(l), lc2 = this.collapse(l2);
+    return this.list().some(({ w, c }) => p.includes(w) || l.includes(w) || l2.includes(w) || (c.length >= 4 && (lc.includes(c) || lc2.includes(c))));
   },
   /* liefert {name, filtered} – name ist sicher für die Anzeige */
   clean(raw) {
