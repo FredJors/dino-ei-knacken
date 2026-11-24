@@ -107,9 +107,10 @@ const CONFIG = {
     normal: 240, boss: 360, duel: 240,
     urgentAt: 30,                         // ab hier wird es dringlich
   },
-  hp: {                                    // HP = (base + perUser · aktive^exponent) · Modus-Faktor
-    base: 20, perUser: 6, exponent: 0.9,
-    min: 15, max: 6000,
+  hp: {                                    // HP = (base + perUser · eff^exponent) · Modus-Faktor
+    base: 8, perUser: 11, exponent: 0.95, // Testmodus (60 % Aktivität): ≈ 3–4 min pro Ei bei 30–500 Zuschauern
+    smallGroup: 3,                        // Kleingruppen-Bonus: eff = aktive² / (aktive + smallGroup) → 1–3 Leute schaffen es locker (0 = aus)
+    min: 8, max: 8000,
     bossMult: 2.2, duelMult: 0.55,
     afterImpactMult: 0.8,                 // nach Meteor-Einschlag ist das nächste Ei weicher
     activeWindowSec: 60,                  // "aktiv" = interagiert in den letzten 60 s
@@ -164,6 +165,7 @@ const easeInCubic = t => t * t * t;
 const easeOutBack = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
 const easeInOutSine = t => -(Math.cos(Math.PI * t) - 1) / 2;
 const now = () => performance.now() / 1000;
+const gnow = () => Game.t;                 // Spielzeit (steht bei Pause) – für Aktivität, Cooldowns, Helfer
 const fmtTime = s => { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 
@@ -1170,6 +1172,38 @@ const EggArt = {
       Tag-Nacht-Zyklus, Sterne, Wolken, Vulkan mit Rauch, Flugsaurier,
       wiegende Farne & Gräser, grasende Herde, Zufallsereignisse.
    ========================================================================== */
+/* --------------------------------------------------------------------------
+   Sprite-Cache: Herde und Helfer werden als vorgerenderte Animations-Einzelbilder
+   gezeichnet (statt jedes Frame ~20 Formen mit Kontur) → flüssige 60 fps auch
+   mit 15 Herdentieren + 30 Helfern, selbst ohne Grafikbeschleunigung.
+   -------------------------------------------------------------------------- */
+const SpriteCache = {
+  map: new Map(),
+  get(key, make) { let s = this.map.get(key); if (!s) { s = make(); this.map.set(key, s); } return s; },
+  canvas(w, h) { const c = document.createElement('canvas'); c.width = Math.ceil(w); c.height = Math.ceil(h); return c; },
+  drop(prefix) { for (const k of [...this.map.keys()]) if (k.startsWith(prefix)) this.map.delete(k); },
+};
+const HERD_SPR = { S: 0.5, x0: -230, y0: -365, w: 430, h: 380 };     // Rahmen in Dino-Einheiten
+const HELP_SPR = { S: 1.15, x0: -58, y0: -88, w: 108, h: 98 };
+/* kind: 'w' = Laufen (6 Bilder), 'i' = Stehen/Atmen (4), 'b' = Blinzeln (1) */
+function herdFrame(d, kind, i) {
+  return SpriteCache.get(`h|${d.id}|${kind}${i}`, () => {
+    const S = HERD_SPR.S, c = SpriteCache.canvas(HERD_SPR.w * S, HERD_SPR.h * S);
+    const t = kind === 'w' ? i / 6 * TAU / 10 : kind === 'i' ? i / 4 * TAU / 2.2 : 0;
+    Art.drawDino(c.getContext('2d'), d.species, -HERD_SPR.x0 * S, -HERD_SPR.y0 * S, { pal: d.pal, t, walk: kind === 'w' ? 1 : 0, face: 1, scale: S, seed: d.seed, blink: kind === 'b' ? 1 : 0 });
+    return c;
+  });
+}
+function helperFrame(hue, kind, i) {
+  const hb = (Math.round(hue / 15) * 15) % 360;
+  return SpriteCache.get(`p|${hb}|${kind}${i}`, () => {
+    const S = HELP_SPR.S, c = SpriteCache.canvas(HELP_SPR.w * S, HELP_SPR.h * S);
+    const t = kind === 'w' ? i / 6 * TAU / 12 : kind === 'i' ? i / 4 * TAU / 3 : 0;
+    Art.drawHelper(c.getContext('2d'), -HELP_SPR.x0 * S, -HELP_SPR.y0 * S, hb, { t, walk: kind === 'w' ? 1 : 0, face: 1, scale: S, blink: kind === 'b' ? 1 : 0 });
+    return c;
+  });
+}
+
 const SPECIES_H = { trex: 250, triceratops: 180, stegosaurus: 185, brachiosaurus: 335, velociraptor: 170, ankylosaurus: 115, parasaurolophus: 260, spinosaurus: 255, pteranodon: 250, dilophosaurus: 225 };
 const HERD_BAND = { y0: 1170, y1: 1480, x0: 70, x1: 1010 };
 
@@ -1239,7 +1273,18 @@ class HerdDino {
     ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, 120 * s, 18 * s, 0, 0, TAU); ctx.fill();
     const R = RARITIES[this.rarity];
     if (R && R.glow) { const g = softBlob(R.glow); const gs = 200 * s * (1 + Math.sin(this.t * 3) * 0.08); ctx.globalAlpha = 0.55; ctx.drawImage(g, this.x - gs, this.y - SPECIES_H[this.species] * s * 0.55 - gs, gs * 2, gs * 2); ctx.globalAlpha = 1; }
-    Art.drawDino(ctx, this.species, this.x, this.y, { pal: this.pal, t: this.t, walk: this.walk, face: this.face, scale: s, seed: this.seed, blink: this.blink > 0 ? 1 : 0, rot: this.rot * this.face });
+    if (this.joining) {
+      // beim Einlaufen groß → live zeichnen (gestochen scharf)
+      Art.drawDino(ctx, this.species, this.x, this.y, { pal: this.pal, t: this.t, walk: this.walk, face: this.face, scale: s, seed: this.seed, blink: this.blink > 0 ? 1 : 0, rot: this.rot * this.face });
+    } else {
+      const walking = this.walk > 0.5;
+      const kind = walking ? 'w' : this.blink > 0 ? 'b' : 'i';
+      const i = walking ? Math.floor((((this.t * 10) / TAU) % 1) * 6) : kind === 'i' ? Math.floor((((this.t * 2.2) / TAU) % 1) * 4) : 0;
+      const img = herdFrame(this, kind, i), k = s / HERD_SPR.S;
+      ctx.save(); ctx.translate(this.x, this.y); ctx.scale(this.face, 1); if (this.rot) ctx.rotate(this.rot * this.face);
+      ctx.drawImage(img, HERD_SPR.x0 * s, HERD_SPR.y0 * s, img.width * k, img.height * k);
+      ctx.restore();
+    }
     if (this.state === 'stumble') {
       const hy = this.y - 60 * s - 30;
       for (let i = 0; i < 3; i++) { const a = this.t * 5 + i * TAU / 3; Art.starPath(ctx, this.x + Math.cos(a) * 34, hy + Math.sin(a) * 10, 9); ctx.fillStyle = '#ffe14d'; ctx.fill(); }
@@ -1319,7 +1364,9 @@ const World = {
     };
     for (const [x, y, s] of [[90, 975, 0.9], [170, 985, 0.7], [610, 990, 0.8], [700, 978, 1.0], [985, 990, 0.75]]) tree(x, y, s);
     hill(1012, '#86cf66', 7, 12);
-    this.layerLand = m;
+    // nur den unteren Teil behalten (darüber ist alles transparent) → spart Füllrate
+    const [landC, landG] = mk(1080, 1080 - 740); landG.drawImage(m, 0, 740, 1080, 340, 0, 0, 1080, 340);
+    this.layerLand = landC;
     // Boden (Wiese) ab y=990
     const [gr, gg] = mk(1080, 940);
     const grad = gg.createLinearGradient(0, 0, 0, 940); grad.addColorStop(0, '#8fd468'); grad.addColorStop(0.35, '#79c457'); grad.addColorStop(1, '#4f9a3c');
@@ -1396,7 +1443,7 @@ const World = {
     this.shooting = this.shooting.filter(s => s.t < s.life);
     // Herde
     for (const h of this.herd) h.update(dt);
-    this.herd = this.herd.filter(h => !h.dead);
+    if (this.herd.some(h => h.dead)) { for (const h of this.herd) if (h.dead) SpriteCache.drop(`h|${h.id}|`); this.herd = this.herd.filter(h => !h.dead); }
     // Zufalls-Mini-Ereignisse alle 1–2 Minuten
     if (this.t > this.nextEventAt) { this.nextEventAt = this.t + rand(CONFIG.miniEvents.minSec, CONFIG.miniEvents.maxSec); this.randomEvent(); }
   },
@@ -1458,7 +1505,7 @@ const World = {
   drawLand(ctx) {
     for (const f of this.flyers) this._flyer(ctx, f);
     FX.draw(ctx, 0);                                     // Rauch & Lava hinter den Bergen? – vor den Bergen wirkt lebendiger
-    ctx.drawImage(this.layerLand, 0, 0);
+    ctx.drawImage(this.layerLand, 0, 740);
     // Vulkan-Glühen
     const gl = 0.35 + Math.sin(this.t * 2) * 0.08 + (this.eruption > 0 ? 0.6 : 0);
     ctx.globalAlpha = clamp(gl, 0, 1); ctx.globalCompositeOperation = 'lighter';
@@ -1568,12 +1615,12 @@ const Users = {
             lastHitAt: -1e9, greeted: false, likeBuf: 0, helper: null, hue: hashStr(String(ev.uid)) % 360, interactions: 0 };
       this.map.set(ev.uid, u);
     } else if (raw !== u.raw) { const c = NameFilter.clean(raw); u.raw = raw; u.name = c.name; u.filtered = c.filtered; }
-    u.lastActive = now(); u.interactions++;
+    u.lastActive = gnow(); u.interactions++;
     return u;
   },
   label(u) { return !u || u.muted ? CONFIG.names.anonymous : u.name; },
   activeCount() {
-    const tn = now();
+    const tn = gnow();
     if (tn - this._activeAt > 1) {
       const lim = tn - CONFIG.hp.activeWindowSec; let n = 0;
       for (const u of this.map.values()) if (u.lastActive >= lim) n++;
@@ -1679,8 +1726,8 @@ class Helper {
     this.fromLeft = Math.random() < 0.5;
     this.x = this.fromLeft ? -60 : 1140; this.y = 1060; this.tx = this.x; this.ty = this.y; this.scale = 1;
     this.state = 'walk'; this.t = rand(0, 10); this.walk = 1; this.face = this.fromLeft ? 1 : -1;
-    this.peckT = 0; this.hop = 0; this.vh = 0; this.cheerT = 0; this.lastAct = now(); this.tagUntil = now() + CONFIG.helpers.tagSec + 2;
-    this.slot = null; this.dead = false; this.blinkT = rand(1, 5); this.blink = 0; this.joinedAt = now();
+    this.peckT = 0; this.hop = 0; this.vh = 0; this.cheerT = 0; this.lastAct = gnow(); this.tagUntil = now() + CONFIG.helpers.tagSec + 2;
+    this.slot = null; this.dead = false; this.blinkT = rand(1, 5); this.blink = 0; this.joinedAt = gnow();
   }
   setSlot(s) { this.slot = s; this.tx = s.x; this.ty = s.y; this.scale = s.scale; if (this.state !== 'leave') this.state = 'walk'; }
   leave() { this.state = 'leave'; this.tx = this.x < 540 ? -120 : 1200; this.slot = null; }
@@ -1706,7 +1753,12 @@ class Helper {
     const k = this.peckT > 0 ? Math.sin((1 - this.peckT / 0.28) * Math.PI) : 0;
     const x = this.x + this.face * k * 12;
     ctx.fillStyle = 'rgba(30,50,20,0.25)'; ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, 30 * this.scale, 7 * this.scale, 0, 0, TAU); ctx.fill();
-    Art.drawHelper(ctx, x, this.y, this.hue, { t: this.t, walk: this.walk, face: this.face, scale: this.scale, peck: k * 0.55, hop: this.hop, blink: this.blink > 0 ? 1 : 0 });
+    const kind = this.walk ? 'w' : this.blink > 0 ? 'b' : 'i';
+    const i = this.walk ? Math.floor((((this.t * 12) / TAU) % 1) * 6) : kind === 'i' ? Math.floor((((this.t * 3) / TAU) % 1) * 4) : 0;
+    const img = helperFrame(this.hue, kind, i);
+    ctx.save(); ctx.translate(x, this.y - this.hop); ctx.scale(this.face * this.scale, this.scale); if (k) ctx.rotate(k * 0.55);
+    ctx.drawImage(img, HELP_SPR.x0, HELP_SPR.y0, HELP_SPR.w, HELP_SPR.h);
+    ctx.restore();
   }
   /* Namensschild – wird separat gezeichnet (max. 6 gleichzeitig, versetzt, damit nichts überlappt) */
   drawTag(ctx, lift) {
@@ -1762,19 +1814,20 @@ const Game = {
     this.boardDirty = true;
     StatsLog.mark('round', { mode, egg: this.eggNumber });
   },
-  computeMaxHp(mode) {
+  computeMaxHp(mode, soft = this.softer) {
     const H = CONFIG.hp, act = Math.max(1, Users.activeCount());
-    let hp = H.base + H.perUser * Math.pow(act, H.exponent);
+    const eff = H.smallGroup > 0 ? act * act / (act + H.smallGroup) : act;
+    let hp = H.base + H.perUser * Math.pow(eff, H.exponent);
     if (mode === 'boss') hp *= H.bossMult;
     if (mode === 'duel') hp *= H.duelMult;
-    hp *= this.softer;
+    hp *= soft;                                   // < 1 direkt nach einem Meteor-Einschlag
     return clamp(Math.round(hp), H.min, H.max);
   },
   spawnEggs(restore) {
     const xs = this.eggXs(this.mode);
     this.duration = restore ? restore.duration : CONFIG.timer[this.mode] || CONFIG.timer.normal;
     this.timeLeft = restore ? restore.timeLeft : this.duration;
-    const used = new Set();
+    const used = new Set(this.lastPals || []);          // neue Farbe: nicht wie das letzte Ei
     this.eggs = xs.map((x, i) => {
       const r = restore && restore.eggs[i];
       let palIdx = r ? r.palIdx : randInt(0, EGG_PALETTES.length - 1);
@@ -1783,8 +1836,10 @@ const Game = {
       const e = new Egg({ mode: this.mode, team: this.mode === 'duel' ? i + 1 : 0, x, maxHp: r ? r.maxHp : this.computeMaxHp(this.mode), hp: r ? r.hp : undefined,
         seed: r ? r.seed : undefined, palIdx, pattern: r ? r.pattern : undefined, contrib: r ? r.contrib : undefined, last: r ? r.last : undefined });
       e.dropT = -i * 0.25;
+      e.soft = r ? (r.soft || 1) : this.softer;
       return e;
     });
+    this.lastPals = this.eggs.map(e => e.palIdx);
     this.softer = 1;
     this.phase = 'play'; this.phaseT = 0; this.lastRescale = this.t;
     this.layoutHelpers();
@@ -1794,9 +1849,9 @@ const Game = {
     // HP passt sich der Zahl aktiver Nutzer an; der Fortschritt in % bleibt erhalten
     for (const e of this.eggs) {
       if (e.state !== 'idle' && e.state !== 'drop') continue;
-      const target = this.computeMaxHp(this.mode);
+      const target = this.computeMaxHp(this.mode, e.soft || 1);
       if (Math.abs(target - e.maxHp) / e.maxHp < 0.03) continue;
-      const nm = clamp(target, e.maxHp * 0.8, e.maxHp * 1.25);
+      const nm = clamp(target, e.maxHp * 0.8, e.maxHp * 1.5);     // nach oben schneller (Stream-Start)
       const ratio = e.hp / e.maxHp; e.maxHp = Math.round(nm); e.hp = Math.max(0.01, ratio * e.maxHp);
     }
   },
@@ -1818,7 +1873,7 @@ const Game = {
           const team = parseTeam(ev.text);
           if (team && team !== u.team) { u.team = team; this.teamPop(u, team); if (u.helper) this.layoutHelpers(); }
         }
-        const tn = now() * 1000;
+        const tn = gnow() * 1000;
         if (tn - u.lastHitAt >= D.commentCooldownMs) { u.lastHitAt = tn; this.hit(u, D.comment, 'comment'); }
         else this.ensureHelper(u);
         break;
@@ -1854,10 +1909,10 @@ const Game = {
   },
   ensureHelper(u) {
     if (u.muted) return;
-    if (u.helper && !u.helper.dead && u.helper.state !== 'leave') { u.helper.lastAct = now(); return; }
+    if (u.helper && !u.helper.dead && u.helper.state !== 'leave') { u.helper.lastAct = gnow(); return; }
     if (this.helpers.filter(h => h.state !== 'leave').length >= CONFIG.helpers.max) {
       let old = null; for (const h of this.helpers) if (h.state !== 'leave' && (!old || h.lastAct < old.lastAct)) old = h;
-      if (!old || now() - old.lastAct < 8) return;
+      if (!old || gnow() - old.lastAct < 8) return;
       old.leave(); const ou = Users.map.get(old.uid); if (ou) ou.helper = null;
     }
     if (this.mode === 'duel' && !u.team) u.team = Math.random() < 0.5 ? 1 : 2;
@@ -1989,7 +2044,7 @@ const Game = {
     let team = null, members = [];
     if (this.mode === 'duel') {
       team = egg.team;
-      members = [...Users.map.values()].filter(u => u.team === team && !u.muted && this.sessionUsers.has(u.id) && u.lastActive > now() - this.duration - 30)
+      members = [...Users.map.values()].filter(u => u.team === team && !u.muted && this.sessionUsers.has(u.id) && u.lastActive > gnow() - this.duration - 30)
         .sort((a, b) => ((egg.contrib.get(b.id) || { d: 0 }).d) - ((egg.contrib.get(a.id) || { d: 0 }).d)).map(u => u.name);
       for (const e of this.eggs) if (e !== egg) { e.state = 'roll'; e.rollDir = e.x < egg.x ? -1 : 1; }
     }
@@ -2070,7 +2125,7 @@ const Game = {
     if (!this.paused) this.t += dt;
     this.phaseT += this.paused ? 0 : dt;
     // Likes bündeln
-    if (now() - this.lastLikeFlush >= CONFIG.damage.likeBundleMs / 1000) { this.lastLikeFlush = now(); this.flushLikes(); }
+    if (gnow() - this.lastLikeFlush >= CONFIG.damage.likeBundleMs / 1000) { this.lastLikeFlush = gnow(); this.flushLikes(); }
     // Begrüßungen bündeln
     if (this.greetBuf.length && now() - this.greetAt > 1.2) {
       this.greetAt = now();
@@ -2109,7 +2164,7 @@ const Game = {
     // Helfer
     const eggXFor = h => { if (!h.slot) return null; const e = this.mode === 'duel' ? this.eggs.find(e => e.team === h.slot.team) : this.eggs[0]; return e ? e.x : this.eggXs(this.mode)[Math.max(0, (h.slot.team || 1) - 1)]; };
     for (const h of this.helpers) {
-      if (h.state !== 'leave' && now() - h.lastAct > CONFIG.helpers.inactiveSec) { h.leave(); const u = Users.map.get(h.uid); if (u && u.helper === h) u.helper = null; }
+      if (h.state !== 'leave' && gnow() - h.lastAct > CONFIG.helpers.inactiveSec) { h.leave(); const u = Users.map.get(h.uid); if (u && u.helper === h) u.helper = null; }
       h.update(rdt, eggXFor(h));
     }
     if (this.helpers.some(h => h.dead)) { this.helpers = this.helpers.filter(h => !h.dead); }
@@ -2210,7 +2265,7 @@ Persist.snapshot = function () {
   let round = null;
   if (Game.phase === 'play' && Game.eggs.length && Game.eggs.every(e => e.state === 'idle' || e.state === 'drop')) {
     round = { mode: Game.mode, timeLeft: Game.timeLeft, duration: Game.duration,
-      eggs: Game.eggs.map(e => ({ team: e.team, maxHp: e.maxHp, hp: e.hp, seed: e.seed, palIdx: e.palIdx, pattern: e.pattern, last: e.lastHitter,
+      eggs: Game.eggs.map(e => ({ team: e.team, maxHp: e.maxHp, hp: e.hp, seed: e.seed, palIdx: e.palIdx, pattern: e.pattern, last: e.lastHitter, soft: e.soft,
         contrib: [...e.contrib.entries()].sort((a, b) => b[1].d - a[1].d).slice(0, 300) })) };
   } else if (Game.phase === 'intro') round = { introMode: Game.mode };
   return {
@@ -2447,7 +2502,7 @@ const HUD = {
     if (Game.mode !== 'duel') return;
     const xs = Game.eggXs('duel');
     if (!this._teamAt || t - this._teamAt > 0.5) {          // Teamgrößen nur 2× pro Sekunde zählen
-      this._teamAt = t; const c = { 1: 0, 2: 0 }, lim = now() - 90;
+      this._teamAt = t; const c = { 1: 0, 2: 0 }, lim = gnow() - 90;
       for (const u of Users.map.values()) if (u.team && u.lastActive > lim) c[u.team]++;
       this._teams = c;
     }
@@ -3000,7 +3055,7 @@ const TestBar = {
 /* Panel-UI (DOM) */
 const SETTINGS_UI = [
   ['Meteor-Timer (Sekunden)', [['timer.normal', 'Normales Ei', 60, 600, 10], ['timer.boss', 'Boss-Ei', 60, 900, 10], ['timer.duel', 'Duell', 60, 600, 10], ['timer.urgentAt', 'Dringlich ab', 10, 60, 5]]],
-  ['HP = (Basis + proNutzer · aktive^Exp) · Faktor', [['hp.base', 'Basis', 1, 300, 1], ['hp.perUser', 'pro aktivem Nutzer', 0.5, 40, 0.5], ['hp.exponent', 'Exponent', 0.5, 1.2, 0.01], ['hp.bossMult', 'Boss-Faktor', 1, 6, 0.1], ['hp.duelMult', 'Duell-Faktor (je Ei)', 0.2, 1.5, 0.05], ['hp.afterImpactMult', 'nach Einschlag', 0.3, 1, 0.05]]],
+  ['HP = (Basis + proNutzer · eff^Exp) · Faktor, eff = aktive²/(aktive+Bonus)', [['hp.base', 'Basis', 1, 300, 1], ['hp.perUser', 'pro aktivem Nutzer', 0.5, 40, 0.5], ['hp.exponent', 'Exponent', 0.5, 1.2, 0.01], ['hp.smallGroup', 'Kleingruppen-Bonus', 0, 10, 0.5], ['hp.bossMult', 'Boss-Faktor', 1, 6, 0.1], ['hp.duelMult', 'Duell-Faktor (je Ei)', 0.2, 1.5, 0.05], ['hp.afterImpactMult', 'nach Einschlag', 0.3, 1, 0.05]]],
   ['Schaden', [['damage.comment', 'Kommentar', 0.1, 5, 0.1], ['damage.commentCooldownMs', 'Cooldown/Nutzer (ms)', 0, 10000, 250], ['damage.like', 'pro Like', 0, 0.5, 0.01], ['damage.likeMaxPerBundle', 'Likes max. pro s', 0, 5, 0.1], ['damage.follow', 'Follow', 0, 60, 1], ['damage.share', 'Share', 0, 40, 1], ['damage.giftPerDiamond', 'Gift pro Diamant', 0, 3, 0.05], ['damage.giftMax', 'Gift-Deckel', 0, 60, 1]]],
   ['Seltenheit (Gewichte)', [['rarity.weights.common', 'Gewöhnlich', 0, 100, 1], ['rarity.weights.rare', 'Selten', 0, 100, 1], ['rarity.weights.epic', 'Episch', 0, 100, 1], ['rarity.weights.legendary', 'Legendär', 0, 100, 1]]],
   ['Rotation', [['rotation.normalsBeforeSpecial', 'Normale vor Spezial', 0, 10, 1], ['rotation.bossAnnounceSec', 'Boss-Ansage (s)', 5, 60, 1], ['rotation.bossEnabled', 'Boss-Ei aktiv', 'bool'], ['rotation.duelEnabled', 'Ei-Duell aktiv', 'bool']]],
@@ -3212,6 +3267,7 @@ function boot() {
   }
   StatsLog.init();
   TestSim.init();
+  Sound.resume();          // OBS-Browserquelle erlaubt Autoplay → Ton sofort; normale Browser warten auf den ersten Klick
   World.init();
   TestBar.build();
   // Spielstand wiederherstellen (absturzsicher)
