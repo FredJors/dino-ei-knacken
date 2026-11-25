@@ -23,6 +23,7 @@ DST = os.path.join(ROOT, 'game', 'assets')
 BG = {
     'bg_cave': {'scale': 1.62, 'top': 57},
     'bg_cave_boss': {'scale': 1.62, 'top': 140},
+    'bg_race': {'scale': 1.45, 'top': 75},       # Sandfläche ≈ y 615–1395 → 6 Bahnen zwischen 640 und 1270
 }
 
 # Motive: Ziel-Höhe (bzw. Breite) nach dem Zuschnitt, Löcher füllen (zwischen Beinen o. Ä.)?

@@ -158,6 +158,17 @@ const CONFIG = {
   save: { everySec: 10, key: 'dinoEi.v1', settingsKey: 'dinoEi.settings.v1', logKey: 'dinoEi.logs.v1' },
   perf: { maxParticles: 650, eventsPerFrame: 50, maxQueue: 2500 },
   test: { viewers: 20, activity: 45 },
+  race: {                               // FARB-RENNEN (Standard-Spiel). Aus = das Dino-Ei-Spiel
+    enabled: true,
+    targetSec: 60, maxSec: 90,            // Ziel-Dauer eines Rennens (Distanz passt sich der Aktivität an) / Zeitlimit
+    startSec: 4, finishSec: 9,            // Countdown vor dem Start / Siegerkarte
+    minDist: 6,                           // mind. so viele Punkte bis ins Ziel
+    cooldownMs: 1500,                     // pro Nutzer max. 1 Kommentar-Punkt / 1,5 s
+    autoTeam: true,                       // Kommentar ohne Farbe → automatisch ins kleinste Team (zählt sofort mit)
+    like: 0.05, likeMaxPerBundle: 0.6,    // Likes = kleiner Turbo fürs eigene Team (gedeckelt)
+    follow: 5, share: 3, giftPerDiamond: 0.3, giftMax: 8,
+    saveKey: 'dinoRennen.v1',
+  },
   bots: {                               // Start-Bots: füllen auf, solange noch keine 20 echten Mitspieler da sind
     enabled: true, fill: 20,              // Bots = fill − echte Mitspieler (jeder echte ersetzt nach und nach einen Bot)
     activity: 55,                         // % – wie fleißig die Bots kommentieren (nur Kommentare, als „Bot …“ erkennbar)
@@ -166,6 +177,7 @@ const CONFIG = {
   milestones: [3, 5, 10, 25, 50, 100, 250],
 };
 const CONFIG_DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
+let RACE_MODE = false;                    // wird beim Start gesetzt (CONFIG.race.enabled oder ?spiel=ei / ?spiel=rennen)
 /* Verschiebung der Landschaft gegenüber dem ursprünglichen Entwurf (Boden bei y = 1010) */
 const LAND_DY = CONFIG.layout.groundY - 1010;
 
@@ -301,7 +313,7 @@ function downloadFile(filename, content, mime = 'application/json') {
    -------------------------------------------------------------------------- */
 const DINO_KEYS = ['trex', 'triceratops', 'stegosaurus', 'brachiosaurus', 'velociraptor', 'ankylosaurus', 'parasaurolophus', 'spinosaurus', 'pteranodon', 'dilophosaurus'];
 const Assets = {
-  files: Object.assign({ bg: 'bg_cave.jpg', bgBoss: 'bg_cave_boss.jpg', rocks: 'fg_rocks.webp', meteor: 'meteor.webp', egg_boss: 'egg_boss.webp' },
+  files: Object.assign({ bg: 'bg_cave.jpg', bgBoss: 'bg_cave_boss.jpg', bgRace: 'bg_race.jpg', rocks: 'fg_rocks.webp', meteor: 'meteor.webp', egg_boss: 'egg_boss.webp' },
     Object.fromEntries([1, 2, 3, 4, 5, 6].map(i => ['egg_' + i, `egg_${i}.webp`])),
     Object.fromEntries(DINO_KEYS.map(k => ['dino_' + k, `dino_${k}.webp`]))),
   img: {}, ok: {}, failed: {}, loaded: 0, listeners: [],
@@ -1347,8 +1359,8 @@ const DinoArt = {
   dims(sp, size) { const im = Assets.img['dino_' + sp], w = im.naturalWidth, h = im.naturalHeight, s = size / Math.sqrt(w * h); return [w * s, h * s]; },
   height(sp, size) { return this.has(sp) ? this.dims(sp, size)[1] : (SPECIES_H[sp] || 230) * size / 300; },
   _q(size) { return Math.max(18, Math.round(size / 6) * 6); },
-  sprite(sp, rarity, palIdx, size) {
-    const q = this._q(size), tint = this.tintFor(sp, rarity, palIdx || 0), key = sp + '|' + q + '|' + (tint || '-');
+  sprite(sp, rarity, palIdx, size, tintOverride) {
+    const q = this._q(size), tint = tintOverride !== undefined ? tintOverride : this.tintFor(sp, rarity, palIdx || 0), key = sp + '|' + q + '|' + (tint || '-');
     let c = this.cache.get(key); if (c) return c;
     const im = Assets.img['dino_' + sp], [w, h] = this.dims(sp, q);
     const base = Assets.scaled(im, w, h);
@@ -1370,7 +1382,7 @@ const DinoArt = {
   },
   /* Füße bei (x, y); o: size, rarity, palIdx, face (1 = schaut nach rechts), rot, sx, sy, alpha → gibt die Höhe zurück */
   draw(ctx, sp, x, y, o = {}) {
-    const size = o.size || 120, c = this.sprite(sp, o.rarity || 'common', o.palIdx || 0, size), k = size / this._q(size);
+    const size = o.size || 120, c = this.sprite(sp, o.rarity || 'common', o.palIdx || 0, size, o.tint), k = size / this._q(size);
     const w = c.width * k, h = c.height * k;
     ctx.save(); ctx.translate(x, y); if (o.rot) ctx.rotate(o.rot); ctx.scale((o.face || 1) * (o.sx || 1), o.sy || 1);
     if (o.alpha != null) ctx.globalAlpha *= o.alpha;
@@ -4151,7 +4163,7 @@ const EventQueue = {
     }
     this.q.push(ev);
   },
-  process(budget) { let n = 0; while (this.q.length && n < budget) { Game.handleEvent(this.q.shift()); n++; } },
+  process(budget) { let n = 0; const G = RACE_MODE ? Race : Game; while (this.q.length && n < budget) { G.handleEvent(this.q.shift()); n++; } },
 };
 
 const Net = {
@@ -4212,6 +4224,7 @@ const TestSim = {
   emit(type, i, extra = {}) {
     const u = this.user(i);
     const ev = Object.assign({ type, uid: u.uid, name: u.name }, extra);
+    if (type === 'chat' && ev.text == null && RACE_MODE) ev.text = Race.testText(Users.map.get(u.uid) || { id: u.uid });
     if (type === 'chat' && ev.text == null) {
       const usr = Users.map.get(u.uid);
       if (Game.mode === 'duel' && (!usr || !usr.team || Math.random() < 0.08)) ev.text = Math.random() < 0.5 ? '1' : '2';
@@ -4229,8 +4242,8 @@ const TestSim = {
       case 'F': this.emit('follow', i); break;
       case 'S': this.emit('share', i); break;
       case 'G': this.emit('gift', i, { diamonds: 10 }); break;
-      case '1': this.emit('chat', i, { text: '1' }); break;
-      case '2': this.emit('chat', i, { text: '2' }); break;
+      case '1': this.emit('chat', i, RACE_MODE ? {} : { text: '1' }); break;
+      case '2': this.emit('chat', i, RACE_MODE ? {} : { text: '2' }); break;
     }
   },
   update(dt) {
@@ -4287,7 +4300,7 @@ const Bots = {
   },
   chat(id) {
     const i = parseInt(id.slice(4), 10) || 0, u = Users.map.get(id);
-    const text = Game.mode === 'duel' && (!u || !u.team) ? (Math.random() < 0.5 ? '1' : '2') : 'knack';
+    const text = RACE_MODE ? (Math.random() < 0.85 ? RACE_COLORS[i % RACE_COLORS.length].key : 'los') : Game.mode === 'duel' && (!u || !u.team) ? (Math.random() < 0.5 ? '1' : '2') : 'knack';
     EventQueue.push(normalizeEvent({ type: 'chat', uid: id, name: 'Bot ' + this.NAMES[i % this.NAMES.length], text }));
   },
 };
@@ -4379,7 +4392,7 @@ const Host = {
     if (!cmd || typeof cmd !== 'object') return null;
     try {
       switch (cmd.c) {
-        case 'hotkey': return { msg: Game.hotkey(cmd.k) };
+        case 'hotkey': return { msg: RACE_MODE ? Race.hotkey(cmd.k) : Game.hotkey(cmd.k) };
         case 'test': if (!Net.testMode) return { msg: 'Test-Events nur im Testmodus' }; TestSim.manual(cmd.k); return { msg: '' };
         case 'testViewers': TestSim.viewers = clamp(Number(cmd.v) || 0, 0, 500); return { msg: '' };
         case 'testActivity': TestSim.activity = clamp(Number(cmd.v) || 0, 0, 100); return { msg: '' };
@@ -4392,6 +4405,7 @@ const Host = {
           setPath(CONFIG, cmd.path, v); saveSetting(cmd.path, v);
           if (cmd.path.startsWith('audio.')) Sound.applyVolumes();
           if (cmd.path.startsWith('names.')) Users.refilter();
+          if (cmd.path === 'race.enabled' && !IS_PANEL && v !== RACE_MODE) { Persist.save(); setTimeout(() => location.reload(), 400); return { msg: v ? 'Farb-Rennen startet …' : 'Ei-Spiel startet …' }; }
           if (cmd.path === 'assets.enabled') { HUD.lexDirty = true; HUD.cta.key = null; HUD.nests = {}; for (const e of Game.eggs) e.retex(); }
           return { msg: '' };
         }
@@ -4409,6 +4423,7 @@ const Host = {
         case 'import': Persist.importJSON(cmd.data); return { msg: 'Import erfolgreich' };
         case 'log': return { msg: 'Log erstellt', download: cmd.fmt === 'csv' ? { filename: `dino-ei-log-${todayStr()}.csv`, content: '﻿' + StatsLog.csv(), mime: 'text/csv' } : { filename: `dino-ei-log-${todayStr()}.json`, content: StatsLog.json(), mime: 'application/json' } };
         case 'resetAll':
+          if (RACE_MODE) { Race.reset(); return { msg: 'Rennen-Statistik zurückgesetzt' }; }
           Store.del(CONFIG.save.key); World.herd = []; Board.today = { date: todayStr(), map: {} }; Board.all = {}; Coll.users = {}; Coll.lexikon = {}; Coll.firsts = {};
           Game.totals = { eggs: 0, hatches: 0, impacts: 0 }; Game.hatchTimes = []; Game.eggNumber = 0; HUD.lexDirty = true; Game.boardDirty = true; Game.resetRound(); Persist.save();
           return { msg: 'Alles zurückgesetzt' };
@@ -4422,6 +4437,7 @@ const Host = {
       bridge: Net.state, tiktok: Net.tiktok, testMode: Net.testMode, forceTest: Net.forceTest, everConnected: Net.everConnected,
       active: Users.activeCount(), bots: Bots.ids.length, ipm: Host.ipm(), timeLeft: Game.phase === 'play' ? Game.timeLeft : null, mode: Game.mode, phase: Game.phase,
       paused: Game.paused, muted: Sound.muted, audioReady: Sound.ready, eggNumber: Game.eggNumber, next: Game.peekNextMode(),
+      race: RACE_MODE ? { no: Race.no, phase: Race.phase, timeLeft: Race.phase === 'race' ? Race.timeLeft : null, dist: Race.dist, scores: Race.scores.map(x => Math.round(x)), lead: Race.lead } : null,
       eggs: e.map(x => ({ team: x.team, hp: Math.round(x.hp * 10) / 10, maxHp: x.maxHp, p: Math.round(x.progress * 100) })),
       helpers: Game.helpers.length, herd: World.herd.length, queue: EventQueue.q.length, fps: Math.round(Loop.fps),
       totals: Game.totals, avgHatch: Game.hatchTimes.length ? Math.round(Game.hatchTimes.reduce((a, b) => a + b, 0) / Game.hatchTimes.length) : null,
@@ -4458,6 +4474,7 @@ const TestBar = {
 
 /* Panel-UI (DOM) */
 const SETTINGS_UI = [
+  ['Spiel', [['race.enabled', 'Farb-Rennen (aus = Dino-Ei-Spiel)', 'bool'], ['race.targetSec', 'Rennen dauert etwa (s)', 30, 180, 5], ['race.maxSec', 'Rennen höchstens (s)', 45, 240, 5], ['race.cooldownMs', 'Rennen: Cooldown/Nutzer (ms)', 0, 5000, 250], ['race.autoTeam', 'Ohne Farbe → ins kleinste Team', 'bool']]],
   ['Meteor-Timer (Sekunden)', [['timer.normal', 'Normales Ei', 60, 600, 10], ['timer.boss', 'Boss-Ei', 60, 900, 10], ['timer.duel', 'Duell', 60, 600, 10], ['timer.urgentAt', 'Dringlich ab', 10, 60, 5]]],
   ['HP = (Basis + proNutzer · eff^Exp) · Faktor, eff = aktive²/(aktive+Bonus)', [['hp.base', 'Basis', 1, 300, 1], ['hp.perUser', 'pro aktivem Nutzer', 0.5, 40, 0.5], ['hp.exponent', 'Exponent', 0.5, 1.2, 0.01], ['hp.smallGroup', 'Kleingruppen-Bonus', 0, 10, 0.5], ['hp.bossMult', 'Boss-Faktor', 1, 6, 0.1], ['hp.duelMult', 'Duell-Faktor (je Ei)', 0.2, 1.5, 0.05], ['hp.afterImpactMult', 'nach Einschlag', 0.3, 1, 0.05]]],
   ['Schaden', [['damage.comment', 'Kommentar', 0.1, 5, 0.1], ['damage.commentCooldownMs', 'Cooldown/Nutzer (ms)', 0, 10000, 250], ['damage.like', 'pro Like', 0, 0.5, 0.01], ['damage.likeMaxPerBundle', 'Likes max. pro s', 0, 5, 0.1], ['damage.follow', 'Follow', 0, 60, 1], ['damage.share', 'Share', 0, 40, 1], ['damage.giftPerDiamond', 'Gift pro Diamant', 0, 3, 0.05], ['damage.giftMax', 'Gift-Deckel', 0, 60, 1]]],
@@ -4574,6 +4591,14 @@ const Panel = {
     this.stat('tiktok', tk.status || '–', tk.status === 'verbunden' ? 'ok' : (tk.status === 'keine Bridge' ? 'mid' : 'bad'));
     this.stat('active', S.bots ? `${S.active} (${S.bots} Bots)` : String(S.active));
     this.stat('ipm', String(S.ipm));
+    if (S.race) {
+      const RS = S.race, lead = RS.lead >= 0 ? RACE_COLORS[RS.lead].name : '–';
+      this.stat('time', RS.timeLeft != null ? fmtTime(RS.timeLeft) : '–', RS.timeLeft != null && RS.timeLeft < 10 ? 'bad' : '');
+      this.stat('mode', 'Farb-Rennen' + (S.paused ? ' ⏸' : ''), S.paused ? 'mid' : '');
+      this.stat('hp', `Ziel ${RS.dist} · vorn: ${lead}`);
+      this.stat('next', `Rennen #${RS.no}`);
+      el.querySelector('#pInfo').textContent = `Rennen #${RS.no} · ${{ start: 'Countdown', race: 'läuft', finish: 'Sieger' }[RS.phase] || RS.phase} · Punkte: ` + RACE_COLORS.map((C, i) => `${C.name} ${RS.scores[i]}`).join(' · ') + ` · ${S.muted ? '🔇 Ton aus' : (S.audioReady ? '🔊 Ton an' : '🔇 Ton noch gesperrt (einmal ins Spiel klicken)')} · ${S.fps} fps` + (tk.message ? ` · TikTok: ${tk.message}` : '') + (S.error ? ' · Fehler: ' + S.error.slice(0, 120) : '');
+    } else {
     this.stat('time', S.timeLeft != null ? fmtTime(S.timeLeft) : '–', S.timeLeft != null && S.timeLeft < 30 ? 'bad' : '');
     const modeName = { normal: 'Normal', boss: 'Boss-Ei', duel: 'Ei-Duell' };
     const phaseName = { intro: 'Ansage', play: 'läuft', hatch: 'schlüpft', reveal: 'Karte', impact: 'Einschlag', boot: '…' };
@@ -4583,6 +4608,7 @@ const Panel = {
     el.querySelector('#pInfo').textContent = `Ei #${S.eggNumber} · Phase: ${phaseName[S.phase] || S.phase} · ${S.muted ? '🔇 Ton aus' : (S.audioReady ? '🔊 Ton an' : '🔇 Ton noch gesperrt (einmal ins Spiel klicken)')} · Helfer ${S.helpers} · Herde ${S.herd} · Queue ${S.queue} · ${S.fps} fps` +
       (S.mission ? ` · 🎯 ${S.mission.got}/${S.mission.target} (${S.mission.left} s)` : '') + (S.hype ? (S.hype.active ? ` · 🔥 HYPE ${S.hype.active} s` : ` · Hype ${S.hype.value} %`) : '') +
       (tk.message ? ` · TikTok: ${tk.message}` : '') + (tk.viewers != null ? ` · Zuschauer ${tk.viewers}` : '') + (S.storeOk ? '' : ' · ⚠️ Speichern nicht möglich') + (S.error ? ' · Fehler: ' + S.error.slice(0, 120) : '');
+    }
     el.querySelector('#pTestInfo').textContent = S.testMode ? (S.forceTest ? 'Testmodus ist erzwungen.' : 'Testmodus aktiv (keine Bridge verbunden).') : 'Live-Modus: Events kommen von TikTok. Test-Tasten sind gesperrt.';
     el.querySelector('#bForce').classList.toggle('on', !!S.forceTest);
     const tv = el.querySelector('#tViewers'), ta = el.querySelector('#tAct');
@@ -4610,6 +4636,543 @@ const Panel = {
   },
 };
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+/* ==========================================================================
+   16. FARB-RENNEN – 6 Dinos in den beliebtesten Lieblingsfarben rennen von
+       links nach rechts. Jeder Kommentar mit einer Farbe schiebt diesen Dino
+       nach vorn; die Farbe mit den meisten Punkten gewinnt (erste im Ziel).
+       Wer einmal eine Farbe schreibt, ist in diesem Team: spätere Kommentare
+       ohne Farbe und Likes zählen weiter für sein Team.
+   ========================================================================== */
+const RACE_COLORS = [
+  { key: 'blau', name: 'BLAU', col: '#2f86ff', light: '#8fc0ff', dark: '#163f8a', species: 'triceratops', tint: null,
+    re: /(^|[^a-zäöüß])(blau(e|er|es|en)?|blue|bleu|azul)(?![a-zäöüß])/, emo: ['💙', '🔵', '🟦', '🩵', '🫐'] },
+  { key: 'rot', name: 'ROT', col: '#ff3b3b', light: '#ff9a9a', dark: '#8a1414', species: 'spinosaurus', tint: null,
+    re: /(^|[^a-zäöüß])(rot(e|er|es|en)?|red|rouge|rojo)(?![a-zäöüß])/, emo: ['❤', '♥', '🔴', '🟥', '🌹', '🍓'] },
+  { key: 'gruen', name: 'GRÜN', col: '#2fc45a', light: '#97eba9', dark: '#136b2c', species: 'trex', tint: null,
+    re: /(^|[^a-zäöüß])((grün|grun|gruen)(e|er|es|en)?|green|gren|verde)(?![a-zäöüß])/, emo: ['💚', '🟢', '🟩', '🍀', '🌿'] },
+  { key: 'lila', name: 'LILA', col: '#a45cff', light: '#d2b0ff', dark: '#4f1e96', species: 'parasaurolophus', tint: null,
+    re: /(^|[^a-zäöüß])(lila|violett?|purple|purpur|violet)(?![a-zäöüß])/, emo: ['💜', '🟣', '🟪', '🍇'] },
+  { key: 'gelb', name: 'GELB', col: '#ffcf1f', light: '#ffe98a', dark: '#8a6a00', species: 'dilophosaurus', tint: '#ffd21a',
+    re: /(^|[^a-zäöüß])(gelb(e|er|es|en)?|yellow|yelow|amarillo)(?![a-zäöüß])/, emo: ['💛', '🟡', '🟨', '🌻', '🌼'] },
+  { key: 'pink', name: 'PINK', col: '#ff5fb8', light: '#ffb0db', dark: '#8a1f5c', species: 'pteranodon', tint: '#ff4fae',
+    re: /(^|[^a-zäöüß])(pink|rosa|rose)(?![a-zäöüß])/, emo: ['🩷', '💗', '💖', '💕', '🌸', '🎀', '💓'] },
+];
+/* kleine Farbfakten nach jedem Sieg (bewusst als "gilt als" formuliert) */
+const COLOR_FACTS = {
+  blau: ['Blau ist weltweit die beliebteste Lieblingsfarbe.', 'Blau gilt als Farbe der Ruhe und der Treue.', 'Viele Firmen nutzen Blau, weil es vertrauenswürdig wirkt.', 'Blaue Lebensmittel sind in der Natur sehr selten.'],
+  rot: ['Rot gilt als Farbe der Energie und Leidenschaft.', 'Rot fällt dem Auge besonders schnell auf – deshalb sind Stoppschilder rot.', 'Rot-Fans gelten als mutig und spontan.', 'In vielen Sprachen ist Rot die erste „bunte“ Farbe mit eigenem Namen.'],
+  gruen: ['Grün gilt als Farbe der Hoffnung.', 'Unser Auge kann besonders viele Grüntöne unterscheiden.', 'Notausgänge sind grün – Grün steht für „sicher“.', 'Grün-Fans gelten als ausgeglichen und naturverbunden.'],
+  lila: ['Lila galt früher als Farbe der Könige – der Farbstoff war extrem teuer.', 'Lila gilt als Farbe der Kreativität.', 'Lila-Fans gelten als fantasievoll und einzigartig.', 'Lila mischt das ruhige Blau mit dem feurigen Rot.'],
+  gelb: ['Gelb gilt als Farbe der guten Laune.', 'Gelb sieht man von weitem besonders gut – darum sind viele Warnschilder gelb.', 'Gelb-Fans gelten als fröhlich und optimistisch.', 'Die Sonne wirkt gelb – eigentlich leuchtet sie fast weiß.'],
+  pink: ['Pink gilt als verspielt, mutig und selbstbewusst.', 'Flamingos sind pink, weil sie Krebstierchen mit Farbstoff fressen.', 'Pink-Fans gelten als herzlich und kreativ.', 'Ein Farbton heißt „Baker-Miller-Pink“ – er soll beruhigend wirken.'],
+};
+/* Farbe aus einem Kommentar lesen: Wörter (auch "blauuu", "#teamrot", "grünes") und Emojis; die zuerst genannte zählt */
+function parseColor(text) {
+  if (!text) return -1;
+  const low = String(text).toLowerCase(), col = low.replace(/(.)\1+/g, '$1');
+  let best = -1, bestAt = 1e9;
+  RACE_COLORS.forEach((c, i) => {
+    for (const s of [low, col]) { const m = c.re.exec(s); if (m) { const at = m.index + m[1].length; if (at < bestAt) { bestAt = at; best = i; } } }
+    for (const e of c.emo) { const at = low.indexOf(e); if (at >= 0 && at < bestAt) { bestAt = at; best = i; } }
+  });
+  return best;
+}
+
+const Race = {
+  phase: 'start', phaseT: 0, no: 0, scores: [0, 0, 0, 0, 0, 0], disp: [0, 0, 0, 0, 0, 0], walk: [0, 0, 0, 0, 0, 0], lastInc: [0, 0, 0, 0, 0, 0],
+  dist: 6, timeLeft: 90, lead: -1, leadAt: 0, contrib: new Map(), recent: [], result: null, saidEnd: false, lastTick: -1, sfxAt: 0,
+  wins: { date: '', today: {}, all: {} }, fans: { date: '', today: {}, all: {} }, saveAt: 0, rescaleAt: 0, greetBuf: [], greetAt: 0, likeAt: 0,
+  boardImg: null, boardSig: '', boardKind: 0, boardSwitchAt: 0, boardAt: 0,
+
+  init() {
+    const d = Store.get(CONFIG.race.saveKey, null);
+    if (d && typeof d === 'object') {
+      if (d.wins) this.wins = Object.assign({ date: '', today: {}, all: {} }, d.wins);
+      if (d.fans) this.fans = Object.assign({ date: '', today: {}, all: {} }, d.fans);
+      this.no = d.no || 0;
+    }
+    this.rollDay();
+    this.startRace();
+  },
+  rollDay() {
+    const t = todayStr();
+    if (this.wins.date !== t) { this.wins.date = t; this.wins.today = {}; }
+    if (this.fans.date !== t) { this.fans.date = t; this.fans.today = {}; }
+  },
+  save() {
+    const all = Object.entries(this.fans.all);
+    if (all.length > 2000) { all.sort((a, b) => b[1].p - a[1].p); this.fans.all = Object.fromEntries(all.slice(0, 1500)); }
+    Store.set(CONFIG.race.saveKey, { v: 1, wins: this.wins, fans: this.fans, no: this.no });
+  },
+
+  /* ---------- Ablauf ---------- */
+  startRace() {
+    this.no++; this.phase = 'start'; this.phaseT = 0; this.result = null; this.saidEnd = false; this.lastTick = -1;
+    this.scores = [0, 0, 0, 0, 0, 0]; this.lastInc = [0, 0, 0, 0, 0, 0]; this.contrib = new Map(); this.lead = -1;
+    this.timeLeft = CONFIG.race.maxSec; this.dist = this.targetDist(true);
+    Sound.announce('normal'); Sound.setUrgency(0);
+    StatsLog.mark('round', { mode: 'race', egg: this.no });
+    this.boardDirty = true;
+  },
+  /* Ziel-Distanz passt sich der Aktivität an → ein Rennen dauert etwa targetSec */
+  targetDist(initial) {
+    const t = gnow(), lim = t - 60;
+    while (this.recent.length && this.recent[0].t < lim) this.recent.shift();
+    const sum = this.recent.reduce((a, r) => a + r.p, 0), win = clamp(t, 15, 60);
+    const want = clamp(Math.round(sum / win * CONFIG.race.targetSec * 0.25), CONFIG.race.minDist, 400);   // Spitzenreiter hat meist ~25 % der Punkte
+    if (initial) return want;
+    const best = Math.max(...this.scores);
+    return Math.max(Math.round(clamp(want, this.dist * 0.8, this.dist * 1.5)), Math.ceil(best + 2));
+  },
+  finish(idx) {
+    this.phase = 'finish'; this.phaseT = 0; Sound.setUrgency(0);
+    if (idx < 0) { this.result = { idx: -1 }; return; }
+    const C = RACE_COLORS[idx];
+    this.rollDay();
+    this.wins.today[C.key] = (this.wins.today[C.key] || 0) + 1; this.wins.all[C.key] = (this.wins.all[C.key] || 0) + 1;
+    const top = [...this.contrib.entries()].filter(([id, c]) => c.c === idx && !Persist.isMuted(id)).sort((a, b) => b[1].p - a[1].p).slice(0, 3).map(([id, c]) => ({ id, n: c.n }));
+    this.result = { idx, pts: Math.round(this.scores[idx]), top, fact: pick(COLOR_FACTS[C.key]), winsToday: this.wins.today[C.key] };
+    Game.flash = 0.7; Game.flashColor = C.light; Game.shake = Math.min(1, Game.shake + 0.5);
+    Sound.hatch('legendary');
+    const x = this.dinoX(idx), y = this.ground(idx);
+    for (let i = 0; i < 80; i++) FX.spawn({ type: 'confetti', layer: 2, x: x + rand(-80, 80), y: y - 80, vx: rand(-520, 520), vy: rand(-1000, -400), g: 900, drag: 1.2, size: rand(6, 11), rot: rand(0, TAU), vr: rand(-8, 8), life: rand(1.8, 2.8), color: pick([C.col, C.light, '#ffffff', C.col]), important: true });
+    StatsLog.event('race', { no: this.no, winner: C.key, pts: Math.round(this.scores[idx]), dist: this.dist, active: Users.activeCount() });
+    this.save(); this.boardDirty = true;
+  },
+  /* Führende Farbe; bei Gleichstand gewinnt, wer den Stand zuerst erreicht hat */
+  leader() {
+    let best = -1;
+    for (let i = 0; i < 6; i++) {
+      const s = this.scores[i]; if (s <= 0) continue;
+      if (best < 0 || s > this.scores[best] + 1e-9 || (Math.abs(s - this.scores[best]) < 1e-9 && this.lastInc[i] < this.lastInc[best])) best = i;
+    }
+    return best;
+  },
+
+  /* ---------- Events ---------- */
+  handleEvent(ev) {
+    if (!ev || !ev.type || ev.uid == null) return;
+    const isBot = String(ev.uid).startsWith('bot:');
+    if (isBot && !Bots.ids.includes(ev.uid)) return;
+    if (!isBot) StatsLog.count(ev);
+    if (ev.type === 'member') return;
+    const u = Users.touch(ev);
+    const R = CONFIG.race;
+    switch (ev.type) {
+      case 'chat': {
+        const c = parseColor(ev.text);
+        if (c >= 0 && u.rc !== c) {
+          const first = u.rc == null; u.rc = c;
+          if (first && !isBot && !u.muted && !u.filtered) this.greetBuf.push(u);
+          else if (!first && !u.muted) this.popAt(c, `${u.name} → ${RACE_COLORS[c].name}`, RACE_COLORS[c].light, 30);
+        }
+        if (u.rc == null && R.autoTeam) {                     // ohne Farbe kommentiert → ins kleinste Team (wechseln jederzeit per Farbe)
+          u.rc = this.smallestTeam(); u.rcAuto = true;
+          if (!isBot && !u.muted && !u.filtered) this.greetBuf.push(u);
+        }
+        if (u.rc == null) return;
+        const tn = gnow() * 1000;
+        if (tn - (u.raceHitAt || -1e9) < R.cooldownMs) return;
+        u.raceHitAt = tn;
+        this.add(u, u.rc, 1, true);
+        break;
+      }
+      case 'like': if (u.rc != null) u.likeBuf = (u.likeBuf || 0) + Math.max(1, ev.count || 1); break;
+      case 'follow':
+        if (u.rc != null) this.add(u, u.rc, R.follow, true);
+        Game.toast(`Danke fürs Folgen, ${Users.label(u)}!`, { color: '#ffd84a', icon: '⭐', prio: 3, u });
+        break;
+      case 'share':
+        if (u.rc != null) this.add(u, u.rc, R.share, true);
+        Game.toast(`${Users.label(u)} hat den LIVE geteilt – danke!`, { color: '#7fe0ff', icon: '📣', prio: 2, u });
+        break;
+      case 'gift':
+        if (u.rc != null) this.add(u, u.rc, clamp((ev.diamonds || 1) * R.giftPerDiamond, 1, R.giftMax), true);
+        Game.toast(`Danke, ${Users.label(u)}!`, { color: '#ff9be0', icon: '💖', prio: 2, u });
+        break;
+    }
+  },
+  /* Team mit den wenigsten aktiven Mitgliedern (Gleichstand → zufällig) */
+  smallestTeam() {
+    const n = [0, 0, 0, 0, 0, 0], lim = gnow() - 120;
+    for (const u of Users.map.values()) if (u.rc != null && u.lastActive >= lim) n[u.rc]++;
+    const min = Math.min(...n), opts = n.map((v, i) => v === min ? i : -1).filter(i => i >= 0);
+    return pick(opts);
+  },
+  add(u, c, pts, pop) {
+    this.recent.push({ t: gnow(), p: pts });
+    if (this.recent.length > 8000) this.recent.splice(0, this.recent.length - 8000);
+    if (this.phase !== 'race' || Game.paused) return;
+    this.scores[c] += pts; this.lastInc[c] = gnow();
+    if (!u.bot) {
+      const e = this.contrib.get(u.id) || { n: u.name, p: 0, c }; e.n = u.name; e.p += pts; e.c = c; this.contrib.set(u.id, e);
+      this.rollDay();
+      for (const m of [this.fans.today, this.fans.all]) { const f = m[u.id] || (m[u.id] = { n: u.name, p: 0, c }); f.n = u.name; f.p += pts; f.c = c; }
+      this.boardDirty = true;
+    }
+    if (pop && !u.muted) this.popAt(c, u.name, '#ffffff', pts >= 3 ? 40 : 30);
+    if (now() - this.sfxAt > 0.18) { this.sfxAt = now(); Sound.pop(); }
+    if (this.scores[c] >= this.dist) this.finish(c);
+  },
+  popAt(c, text, color, size) {
+    if (Game.pops.length >= 10) Game.pops.shift();
+    const x = this.dinoX(c), y = this.ground(c) - 118;
+    Game.pops.push({ text, x: x + rand(-40, 40), y, t: 0, life: 1.2, color, size, font: 'body' });
+  },
+
+  /* ---------- Update ---------- */
+  update(dt) {
+    if (!Game.paused) Game.t += dt;
+    const R = CONFIG.race;
+    if (!Game.paused) {
+      this.phaseT += dt;
+      if (this.phase === 'start') {
+        const n = Math.ceil(R.startSec - this.phaseT);
+        if (n !== this.lastTick && n > 0 && n <= 3) { this.lastTick = n; Sound.tick(false); }
+        if (this.phaseT >= R.startSec) { this.phase = 'race'; this.phaseT = 0; this.rescaleAt = gnow(); Sound.whoosh(0.7); Sound.bigHit(); Game.shake = Math.min(1, Game.shake + 0.3); }
+      } else if (this.phase === 'race') {
+        this.timeLeft -= dt;
+        if (gnow() - this.rescaleAt > 5) { this.rescaleAt = gnow(); this.dist = this.targetDist(false); }
+        const lead = this.leader();
+        if (lead >= 0 && lead !== this.lead) {
+          if (this.lead >= 0 && this.phaseT > 3 && now() - this.leadAt > 3) { const C = RACE_COLORS[lead]; Game.callout(`${C.name} ÜBERHOLT!`, { color: C.light, x: CONFIG.layout.centerX, y: 600, size: 64, life: 1.6 }); Sound.sparkle(); this.leadAt = now(); }
+          this.lead = lead;
+        }
+        if (!this.saidEnd && this.timeLeft <= 10) { this.saidEnd = true; Game.callout('ENDSPURT!', { color: '#ffd35c', x: CONFIG.layout.centerX, y: 600, size: 84, life: 1.8 }); }
+        if (this.timeLeft <= 10) {
+          Sound.setUrgency(clamp((10 - this.timeLeft) / 10, 0, 1));
+          const s = Math.ceil(this.timeLeft); if (s !== this.lastTick && s > 0) { this.lastTick = s; Sound.tick(s <= 5); }
+        }
+        if (this.timeLeft <= 0) this.finish(this.leader());
+      } else if (this.phase === 'finish') {
+        if (this.phaseT >= (this.result && this.result.idx >= 0 ? R.finishSec : 3.5)) this.startRace();
+      }
+      // Likes bündeln (Turbo fürs eigene Team)
+      if (gnow() - this.likeAt >= 1) {
+        this.likeAt = gnow();
+        for (const u of Users.map.values()) if (u.likeBuf > 0) { const p = Math.min(u.likeBuf * R.like, R.likeMaxPerBundle); u.likeBuf = 0; if (u.rc != null && p > 0) this.add(u, u.rc, p, false); }
+      }
+    }
+    // Anzeige: Dinos laufen weich zur Zielposition
+    for (let i = 0; i < 6; i++) {
+      let target = this.phase === 'start' ? 0 : clamp(this.scores[i] / Math.max(1, this.dist), 0, 1);
+      if (this.phase === 'finish' && this.result && this.result.idx === i) target = 1.09;
+      const prev = this.disp[i];
+      this.disp[i] += (target - prev) * (1 - Math.exp(-dt * (this.phase === 'start' ? 2.5 : 3.2)));
+      const sp = Math.abs(this.disp[i] - prev) / Math.max(dt, 1e-3);
+      this.walk[i] = lerp(this.walk[i], clamp(sp * 9, 0, 1), 1 - Math.exp(-dt * 6));
+      if (this.walk[i] > 0.5 && Math.random() < dt * 10) {
+        const x = this.dinoX(i) - 40, y = this.ground(i);
+        FX.spawn({ type: 'blob', layer: 1, x: x + rand(-10, 10), y: y - rand(0, 8), vx: rand(-80, -30), vy: rand(-30, -5), size: rand(8, 15), grow: 18, life: 0.6, color: '#e9cf9e', alpha: 0.6 });
+      }
+    }
+    // Begrüßungen bündeln
+    if (this.greetBuf.length && now() - this.greetAt > 1.4) {
+      this.greetAt = now(); const u = this.greetBuf[0], C = RACE_COLORS[u.rc];
+      if (this.greetBuf.length === 1) Game.toast(u.rcAuto ? `${u.name} läuft für ${C ? C.name : ''}!` : `${u.name} ist Team ${C ? C.name : ''}!`, { icon: '👋', prio: 1, life: 2.4, u, color: C ? C.col : null });
+      else Game.toast(`${u.name} und ${this.greetBuf.length - 1} weitere sind dabei!`, { icon: '👋', prio: 1, life: 2.6, u });
+      Sound.pop(); this.greetBuf = [];
+    }
+    // gemeinsame Effekte (Einblendungen, Pops, Ansagen, Wackeln)
+    for (const c of Game.callouts) c.t += dt;
+    Game.callouts = Game.callouts.filter(c => c.t < c.life);
+    for (const p of Game.pops) p.t += dt;
+    Game.pops = Game.pops.filter(p => p.t < p.life);
+    for (const t of Game.toasts) t.t += dt;
+    Game.toasts = Game.toasts.filter(t => t.t < t.life);
+    while (Game.toasts.length < 1 && Game.toastQueue.length) {
+      const t = Game.toastQueue.shift(); t.t = 0;
+      if (Game.toastQueue.length >= 3) t.life = Math.min(t.life, 2.0); else if (Game.toastQueue.length >= 1) t.life = Math.min(t.life, 2.6);
+      Game.toasts.push(t); if (t.prio >= 2) Sound.chime(t.prio >= 3);
+    }
+    Game.shake = Math.max(0, Game.shake - dt * 1.6);
+    Game.flash = Math.max(0, Game.flash - dt * 1.8);
+    RaceAmbient.update(dt);
+    if (now() - this.saveAt > CONFIG.save.everySec) { this.saveAt = now(); this.save(); }
+  },
+
+  /* ---------- Host ---------- */
+  hotkey(k) {
+    switch (k) {
+      case 'P': Game.paused = !Game.paused; Sound.paused = Game.paused; return Game.paused ? 'Pause an' : 'Pause aus';
+      case 'M': Sound.setMuted(!Sound.muted); return Sound.muted ? 'Ton aus' : 'Ton an';
+      case 'R': this.no = Math.max(0, this.no - 1); this.startRace(); return 'Rennen neu gestartet';
+      case 'E': RaceAmbient.flyby(); return 'Flugsaurier fliegen vorbei';
+    }
+    return 'Im Farb-Rennen nicht verfügbar';
+  },
+  reset() { this.wins = { date: todayStr(), today: {}, all: {} }; this.fans = { date: todayStr(), today: {}, all: {} }; this.no = 0; this.save(); this.startRace(); },
+  testText(u) {
+    if (Math.random() < 0.12) return pick(['hallo', 'los gehts', 'wow', 'haha', 'go go go']);
+    const fav = u && u.rc != null && Math.random() < 0.9 ? u.rc : hashStr(String(u ? u.id : Math.random())) % 6;
+    const C = RACE_COLORS[Math.random() < 0.85 ? fav : randInt(0, 5)];
+    return pick([C.key === 'gruen' ? 'grün' : C.key, C.name + '!!', 'team ' + C.key, C.emo[0], C.emo[0] + C.emo[0], (C.key === 'gruen' ? 'grüüün' : C.key + C.key.slice(-1).repeat(3))]);
+  },
+
+  /* ---------- Geometrie ---------- */
+  ground(i) { return 640 + 105 * (i + 1) - 6; },
+  dinoX(i) { return lerp(255, 850, this.disp[i]); },
+};
+
+/* Belebung der Rennstrecke: Vulkanrauch, Pollen in der Sonne, Flugsaurier-Silhouetten */
+const RaceAmbient = {
+  smokeT: 0, pollen: [], flyers: [], nextFly: 12,
+  update(dt) {
+    this.smokeT -= dt;
+    if (this.smokeT <= 0) { this.smokeT = 0.5; FX.spawn({ type: 'blob', layer: 0, x: 712 + rand(-8, 8), y: 150, vx: rand(4, 14), vy: rand(-30, -18), size: rand(14, 22), grow: 10, life: rand(5, 7), alpha: 0.45, color: '#e9dfe6', fadeIn: 0.6 }); }
+    if (this.pollen.length < 40) this.pollen.push({ x: rand(0, 1080), y: rand(300, 1500), vx: rand(-8, 8), vy: rand(-10, -3), p: rand(0, TAU), s: rand(1.5, 3), life: rand(8, 16), t: 0 });
+    for (const p of this.pollen) { p.t += dt; p.x += (p.vx + Math.sin(p.t * 0.8 + p.p) * 6) * dt; p.y += p.vy * dt; }
+    this.pollen = this.pollen.filter(p => p.t < p.life);
+    this.nextFly -= dt; if (this.nextFly <= 0) { this.nextFly = rand(18, 35); this.flyby(); }
+    for (const f of this.flyers) { f.x += f.vx * dt; f.t += dt; }
+    this.flyers = this.flyers.filter(f => f.x > -200 && f.x < 1280);
+  },
+  flyby() {
+    const dir = Math.random() < 0.5 ? 1 : -1, y = rand(380, 520), n = randInt(1, 3);
+    for (let i = 0; i < n; i++) this.flyers.push({ x: dir > 0 ? -90 - i * 80 : 1170 + i * 80, y: y + i * 26, vx: dir * rand(90, 120), t: rand(0, 5), s: rand(0.45, 0.65) });
+  },
+  draw(ctx) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const p of this.pollen) { const a = Math.sin(clamp(p.t / p.life, 0, 1) * Math.PI) * (0.35 + 0.25 * Math.sin(p.t * 2 + p.p)); ctx.globalAlpha = a; ctx.fillStyle = '#fff6d0'; ctx.fillRect(p.x, p.y, p.s, p.s); }
+    ctx.restore();
+    if (!this.flyers.length || !DinoArt.has('pteranodon')) return;
+    if (!this.sil) { const src = DinoArt.sprite('pteranodon', 'common', 0, 110), c = SpriteCache.canvas(src.width, src.height), g = c.getContext('2d'); g.drawImage(src, 0, 0); g.globalCompositeOperation = 'source-atop'; g.fillStyle = 'rgba(60,70,90,0.55)'; g.fillRect(0, 0, c.width, c.height); this.sil = c; }
+    for (const f of this.flyers) {
+      const flap = 0.7 + 0.3 * Math.sin(f.t * 7);
+      ctx.save(); ctx.translate(f.x, f.y); ctx.scale((f.vx > 0 ? 1 : -1) * f.s, f.s * flap); ctx.globalAlpha = 0.85;
+      ctx.drawImage(this.sil, -this.sil.width / 2, -this.sil.height / 2); ctx.restore();
+    }
+  },
+};
+
+/* ---------- Zeichnen ---------- */
+const RaceView = {
+  ctaImg: null, ctaKey: '', laneImg: null, howImg: null,
+  L: { cta: [30, 142, 900, 84], status: [30, 240, 900, 86], how: [30, 340, 440, 262], board: [490, 340, 450, 262] },
+  draw(ctx, t) {
+    const sh = Game.shake * Game.shake * 20;
+    ctx.save(); if (sh > 0.3) ctx.translate(rand(-sh, sh), rand(-sh, sh));
+    const bg = Assets.get('bgRace');
+    if (bg) ctx.drawImage(bg, 0, 0);
+    else { const g = ctx.createLinearGradient(0, 0, 0, 1920); g.addColorStop(0, '#8fd0ff'); g.addColorStop(0.3, '#cfeecf'); g.addColorStop(0.32, '#e8cf9e'); g.addColorStop(0.72, '#e2c38c'); g.addColorStop(0.74, '#6fae4f'); g.addColorStop(1, '#3f7a35'); ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1920); }
+    FX.draw(ctx, 0);
+    RaceAmbient.draw(ctx);
+    if (!this.laneImg) this.laneImg = this.renderLanes();
+    ctx.drawImage(this.laneImg, 0, 0);
+    this.drawLaneGlow(ctx, t);
+    for (let i = 0; i < 6; i++) this.drawDino(ctx, i, t);
+    for (let i = 0; i < 6; i++) this.drawLaneLabel(ctx, i, t);
+    FX.draw(ctx, 1);
+    FX.draw(ctx, 2);
+    HUD.drawPops(ctx);
+    ctx.restore();
+    if (Game.flash > 0.01) { ctx.globalAlpha = Math.min(1, Game.flash) * 0.6; ctx.fillStyle = Game.flashColor; ctx.fillRect(0, 0, 1080, 1920); ctx.globalAlpha = 1; }
+    this.drawCTA(ctx, t);
+    this.drawStatus(ctx, t);
+    this.drawHow(ctx);
+    this.drawBoard(ctx, t);
+    this.drawPhase(ctx, t);
+    HUD.drawCallouts(ctx);
+    HUD.drawToasts(ctx);
+    HUD.drawPause(ctx, t);
+    HUD.drawHints(ctx, t);
+  },
+  /* Bahnen: Farbstreifen im Sand, Kreidelinien, Startlinie, Ziel mit Schachbrett (einmal vorgerendert) */
+  renderLanes() {
+    const c = Mat.cv(1080, 1920), g = c.getContext('2d');
+    RACE_COLORS.forEach((C, i) => {
+      const y0 = 640 + 105 * i, gr = g.createLinearGradient(150, 0, 910, 0);
+      gr.addColorStop(0, hexA(C.col, 0.30)); gr.addColorStop(0.15, hexA(C.col, 0.18)); gr.addColorStop(1, hexA(C.col, 0.10));
+      g.fillStyle = gr; g.beginPath(); rr(g, 150, y0 + 4, 760, 97, 14); g.fill();
+    });
+    g.setLineDash([18, 14]); g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,0.55)';
+    for (let i = 0; i <= 6; i++) { const y = 640 + 105 * i; g.beginPath(); g.moveTo(160, y); g.lineTo(905, y); g.stroke(); }
+    g.setLineDash([]);
+    g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(198, 640, 6, 630);
+    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(872, 646, 32, 630);
+    const sq = 13;
+    for (let y = 640, r = 0; y < 1270; y += sq, r++) for (let k = 0; k < 2; k++) { g.fillStyle = (r + k) % 2 ? '#1d1a19' : '#fbf7ee'; g.fillRect(868 + k * sq, y, sq, Math.min(sq, 1270 - y)); }
+    return c;
+  },
+  drawLaneGlow(ctx, t) {
+    const lead = Race.phase === 'race' ? Race.lead : Race.phase === 'finish' && Race.result ? Race.result.idx : -1;
+    if (lead < 0) return;
+    const C = RACE_COLORS[lead], y0 = 640 + 105 * lead;
+    ctx.save(); ctx.globalAlpha = 0.18 + Math.sin(t * 5) * 0.08; ctx.fillStyle = C.col; ctx.beginPath(); rr(ctx, 150, y0 + 4, 760, 97, 14); ctx.fill(); ctx.restore();
+  },
+  drawDino(ctx, i, t) {
+    const C = RACE_COLORS[i], x = Race.dinoX(i), y = Race.ground(i), size = 98 * (0.92 + i * 0.026);
+    const walk = Race.phase === 'start' ? 0 : Race.walk[i];
+    const won = Race.phase === 'finish' && Race.result && Race.result.idx === i;
+    const hop = won ? Math.abs(Math.sin(t * 7)) * 34 : Race.phase === 'start' ? Math.abs(Math.sin(t * 5 + i)) * 8 : 0;
+    ctx.fillStyle = 'rgba(60,40,20,0.28)'; ctx.beginPath(); ctx.ellipse(x, y + 3, size * 0.42, 9, 0, 0, TAU); ctx.fill();
+    let h;
+    if (DinoArt.has(C.species)) {
+      const p = DinoArt.pose(C.species, t + i * 0.7, Math.max(walk, won ? 0.6 : 0), size);
+      h = DinoArt.draw(ctx, C.species, x, y - p.bob - hop, { size, tint: C.tint, face: 1, rot: p.rot, sx: p.sx, sy: p.sy }) + p.bob;
+    } else {
+      const pal = { body: C.col, belly: C.light, dark: C.dark, accent: '#ffffff', pat: C.dark, pattern: 'spots' };
+      Art.drawDino(ctx, C.species, x, y - hop, { pal, t, walk, face: 1, scale: size / 260, seed: i + 1 });
+      h = (SPECIES_H[C.species] || 230) * size / 260;
+    }
+    if (Race.phase === 'race' && Race.lead === i) Icon.draw(ctx, 'crown', x + 6, y - h - hop - 18 + Math.sin(t * 4) * 3, 38);
+  },
+  drawLaneLabel(ctx, i, t) {
+    const C = RACE_COLORS[i], cy = 640 + 105 * i + 50, x = 16, w = 178, h = 56;
+    Glass.draw(ctx, x, cy - h / 2, w, h, h / 2, { border: hexA(C.col, 0.9), tint: hexA(C.col, 0.18), alpha: 0.7 });
+    ctx.beginPath(); ctx.arc(x + 28, cy, 13, 0, TAU); ctx.fillStyle = C.col; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.stroke();
+    drawText(ctx, C.name, x + 50, cy + 1, { size: 26, font: 'title', align: 'left', color: C.light, stroke: false, maxWidth: 86 });
+    const s = Race.phase === 'start' ? 0 : Math.round(Race.scores[i]);
+    drawText(ctx, String(s), x + w - 16, cy + 1, { size: 28, font: 'title', align: 'right', color: '#fff6e0', stroke: false });
+  },
+  /* ---------- Aufruf ---------- */
+  drawCTA(ctx, t) {
+    const [x, y, w, h] = this.L.cta, key = 'cta' + Assets.loaded;
+    if (this.ctaKey !== key) {
+      this.ctaKey = key; const P = Glass.P, c = Mat.cv(w + P * 2, h + P * 2), g = c.getContext('2d');
+      g.drawImage(Glass.panel(w, h, h / 2, { border: 'rgba(255,190,110,0.55)', tint: 'rgba(255,140,40,0.06)' }), 0, 0);
+      const text = 'Schreib deine Lieblingsfarbe!', size = 46, tw = measureText(g, text, size, 'title'), cy = P + h / 2, x0 = P + w / 2 - (tw + 6 * 30) / 2;
+      drawText(g, text, x0, cy + 6, { size, font: 'title', align: 'left', color: 'rgba(0,0,0,0.5)', stroke: false });
+      const gr = g.createLinearGradient(0, -size * 0.5, 0, size * 0.5); gr.addColorStop(0, '#fff6df'); gr.addColorStop(1, '#ffc25a');
+      drawText(g, text, x0, cy + 2, { size, font: 'title', align: 'left', color: gr, stroke: false });
+      RACE_COLORS.forEach((C, i) => { const cx = x0 + tw + 26 + i * 30; g.beginPath(); g.arc(cx, cy, 11, 0, TAU); g.fillStyle = C.col; g.fill(); g.lineWidth = 2; g.strokeStyle = 'rgba(255,255,255,0.85)'; g.stroke(); });
+      this.ctaImg = c;
+    }
+    const s = 1 + Math.sin(t * 2.2) * 0.006;
+    ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.scale(s, s); ctx.drawImage(this.ctaImg, -w / 2 - Glass.P, -h / 2 - Glass.P); ctx.restore();
+  },
+  /* ---------- Zeit + Siege heute ---------- */
+  drawStatus(ctx, t) {
+    const [x, y, w, h] = this.L.status;
+    Glass.draw(ctx, x, y, w, h, 28);
+    const urgent = Race.phase === 'race' && Race.timeLeft <= 10;
+    const txt = Race.phase === 'race' ? fmtTime(Race.timeLeft) : '–:––';
+    Icon.draw(ctx, 'clock', x + 42, y + h / 2 + 1, 46);
+    const ps = urgent ? 1 + Math.max(0, Math.sin(t * 9)) * 0.08 : 1;
+    ctx.save(); ctx.translate(x + 150, y + h / 2 + 3); ctx.scale(ps, ps);
+    drawText(ctx, txt, 0, 0, { size: 54, font: 'title', color: urgent ? '#ff5a3c' : '#ffd35c', strokeWidth: 5, strokeColor: 'rgba(0,0,0,0.6)', drop: false });
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,238,215,0.16)'; ctx.fillRect(x + 250, y + 16, 1.5, h - 32);
+    Glass.title(ctx, 'SIEGE', x + 272, y + 30, 20, '#f2c14e', 'left');
+    Glass.title(ctx, 'HEUTE', x + 272, y + 56, 20, '#f2c14e', 'left');
+    Race.rollDay();
+    RACE_COLORS.forEach((C, i) => {
+      const cx = x + 420 + i * 82, cy = y + h / 2, n = Race.wins.today[C.key] || 0;
+      ctx.beginPath(); ctx.arc(cx, cy, 27, 0, TAU); ctx.fillStyle = C.col; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.stroke();
+      HUD.text(ctx, String(n), cx, cy + 2, { size: 30, font: 'title', color: '#ffffff' });
+    });
+  },
+  /* ---------- So geht's (immer sichtbar) ---------- */
+  drawHow(ctx) {
+    const [x, y, w, h] = this.L.how;
+    if (!this.howImg) {
+      const P = Glass.P, c = Mat.cv(w + P * 2, h + P * 2), g = c.getContext('2d');
+      g.drawImage(Glass.panel(w, h, 26), 0, 0); g.translate(P, P);
+      Glass.title(g, "SO GEHT'S", 26, 32, 27, '#f2c14e', 'left');
+      drawText(g, 'Schreib deine Farbe in den Chat:', 26, 74, { size: 27, align: 'left', color: HUD.TXT, stroke: false, maxWidth: w - 50 });
+      RACE_COLORS.forEach((C, i) => {
+        const cx = 26 + (i % 3) * 132, cy = 106 + Math.floor(i / 3) * 50;
+        g.beginPath(); rr(g, cx, cy, 122, 40, 20); g.fillStyle = C.col; g.fill(); g.lineWidth = 2; g.strokeStyle = 'rgba(255,255,255,0.7)'; g.stroke();
+        drawText(g, C.key === 'gruen' ? 'grün' : C.key, cx + 61, cy + 21, { size: 27, color: '#ffffff', strokeWidth: 4, strokeColor: hexA(C.dark, 0.8), drop: false });
+      });
+      Icon.draw(g, 'heart', 40, 222, 30);
+      drawText(g, 'Likes = Turbo für dein Team', 66, 223, { size: 26, align: 'left', color: HUD.TXT, stroke: false, maxWidth: w - 90 });
+      this.howImg = c;
+    }
+    ctx.drawImage(this.howImg, x - Glass.P, y - Glass.P);
+  },
+  /* ---------- Top-Anfeuerer (dieses Rennen / heute / gesamt) ---------- */
+  drawBoard(ctx, t) {
+    const kinds = ['race', 'today', 'all'];
+    if (t > Race.boardSwitchAt) { Race.boardKind = (Race.boardKind + 1) % 3; Race.boardSwitchAt = t + CONFIG.leaderboard.rotateSec; Race.boardDirty = true; }
+    const kind = kinds[Race.boardKind];
+    if (Race.boardDirty || !Race.boardImg || t - Race.boardAt > 1) {
+      Race.boardDirty = false; Race.boardAt = t;
+      const src = kind === 'race' ? [...Race.contrib.entries()] : Object.entries(kind === 'today' ? Race.fans.today : Race.fans.all);
+      const rows = src.filter(([id]) => !Persist.isMuted(id)).sort((a, b) => b[1].p - a[1].p).slice(0, 5).map(([id, v]) => ({ id, n: v.n, p: v.p, c: v.c }));
+      const sig = kind + rows.map(r => { const u = Users.map.get(r.id); return r.n + Math.round(r.p) + r.c + (u && Avatars.get(u) ? '*' : ''); }).join('|');
+      if (sig !== Race.boardSig) { Race.boardSig = sig; Race.boardImg = this.renderBoard(kind, rows); }
+    }
+    const [x, y] = this.L.board;
+    ctx.drawImage(Race.boardImg, x - Glass.P, y - Glass.P);
+  },
+  renderBoard(kind, rows) {
+    const [, , W, H] = this.L.board, P = Glass.P, c = Mat.cv(W + P * 2, H + P * 2), g = c.getContext('2d');
+    g.drawImage(Glass.panel(W, H, 26), 0, 0); g.translate(P, P);
+    Glass.title(g, 'TOP-ANFEUERER', 24, 32, 27, '#f3e6cf', 'left');
+    const label = { race: 'dieses Rennen', today: 'heute', all: 'gesamt' }[kind], lw = measureText(g, label, 20) + 26;
+    g.beginPath(); rr(g, W - 20 - lw, 17, lw, 30, 15); g.fillStyle = 'rgba(242,193,78,0.92)'; g.fill();
+    drawText(g, label, W - 20 - lw / 2, 33, { size: 20, color: '#2a1a0c', stroke: false });
+    g.fillStyle = 'rgba(255,238,215,0.16)'; g.fillRect(20, 58, W - 40, 1.5);
+    if (!rows.length) { drawText(g, 'Noch niemand –', W / 2, 140, { size: 30, color: HUD.TXT, stroke: false }); drawText(g, 'schreib deine Farbe!', W / 2, 182, { size: 30, color: '#ffd35c', stroke: false }); return c; }
+    const RANK = ['#f2c14e', '#dfe3e8', '#e3985a', '#b9ab9b', '#b9ab9b'];
+    rows.forEach((r, i) => {
+      const cy = 84 + i * 38, u = Users.map.get(r.id) || { id: r.id, name: r.n, hue: hashStr(String(r.id)) % 360 }, C = RACE_COLORS[r.c] || RACE_COLORS[0];
+      drawText(g, (i + 1) + '.', 34, cy + 1, { size: 25, font: 'serif', color: RANK[i], stroke: false });
+      Avatars.draw(g, u, 74, cy, 16, C.col);
+      drawText(g, r.n, 100, cy + 1, { size: 25, align: 'left', color: '#f7efe4', stroke: false, maxWidth: W - 100 - 96 });
+      g.beginPath(); g.arc(W - 74, cy, 8, 0, TAU); g.fillStyle = C.col; g.fill();
+      drawText(g, fmtPts(r.p), W - 22, cy + 1, { size: 24, align: 'right', color: i === 0 ? '#ffd35c' : HUD.SOFT, stroke: false });
+    });
+    return c;
+  },
+  /* ---------- Start-Countdown & Siegerkarte ---------- */
+  drawPhase(ctx, t) {
+    const cx = CONFIG.layout.centerX, st = { strokeColor: '#1c120c' };
+    if (Race.phase === 'start') {
+      const k = Race.phaseT, left = CONFIG.race.startSec - k, n = Math.ceil(left), f = left - Math.floor(left);
+      const vis = clamp(k / 0.3, 0, 1);
+      ctx.save(); ctx.globalAlpha = vis;
+      Glass.draw(ctx, -40, 760, 1160, 300, 0, { tint: 'rgba(255,170,60,0.06)', border: 'rgba(255,200,120,0.5)', alpha: 0.6 });
+      drawText(ctx, `RENNEN #${Race.no}`, cx, 830, Object.assign({ size: 74, font: 'title', color: '#ffd35c', strokeWidth: 12, extrude: 6 }, st));
+      if (n <= 3) { ctx.save(); ctx.translate(cx, 960); const s = 1 + f * 0.5; ctx.scale(s, s); drawText(ctx, String(n), 0, 0, Object.assign({ size: 130, font: 'title', color: '#fff3d6', strokeWidth: 16, extrude: 8 }, st)); ctx.restore(); }
+      else drawText(ctx, 'Wähl deine Farbe!', cx, 960, { size: 54, font: 'title', color: '#fff3d6', strokeWidth: 9, strokeColor: '#1c120c', drop: false });
+      ctx.restore();
+    } else if (Race.phase === 'race' && Race.phaseT < 0.9) {
+      const k = Race.phaseT / 0.9;
+      ctx.save(); ctx.globalAlpha = 1 - k; ctx.translate(cx, 950); ctx.scale(1 + k * 0.6, 1 + k * 0.6);
+      drawText(ctx, 'LOS!', 0, 0, Object.assign({ size: 170, font: 'title', color: '#ffd35c', strokeWidth: 18, extrude: 10 }, st)); ctx.restore();
+    } else if (Race.phase === 'finish') this.drawWinner(ctx, t);
+  },
+  drawWinner(ctx, t) {
+    const res = Race.result, k = Race.phaseT, cx = CONFIG.layout.centerX;
+    if (!res) return;
+    if (res.idx < 0) {
+      const a = clamp(k / 0.3, 0, 1) * clamp((3.5 - k) / 0.3, 0, 1);
+      ctx.save(); ctx.globalAlpha = a; Glass.draw(ctx, 60, 820, 840, 220, 34, { alpha: 0.85 });
+      drawText(ctx, 'Keine Farbe im Ziel …', cx, 890, { size: 54, font: 'title', color: '#ffd35c', strokeWidth: 8, strokeColor: '#1c120c', drop: false });
+      drawText(ctx, 'Schreib deine Lieblingsfarbe!', cx, 970, { size: 40, color: '#fff3d6', stroke: false });
+      ctx.restore(); return;
+    }
+    if (k < 0.9) return;                                   // erst den Sieger über die Ziellinie laufen lassen
+    const C = RACE_COLORS[res.idx], kk = k - 0.9, dur = CONFIG.race.finishSec - 0.9;
+    const inK = easeOutBack(clamp(kk / 0.45, 0, 1)), outK = clamp((dur - kk) / 0.35, 0, 1), cy = 950, W = 860, H = 600;
+    ctx.save(); ctx.globalAlpha = outK; ctx.translate(cx, cy); ctx.scale(inK, inK);
+    ctx.save(); ctx.rotate(t * 0.3); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = C.col; ctx.globalAlpha *= 0.22;
+    for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-70, -680); ctx.lineTo(70, -680); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
+    Glass.draw(ctx, -W / 2, -H / 2, W, H, 36, { alpha: 0.9, border: hexA(C.col, 0.95), glow: hexA(C.col, 0.9) });
+    const pw = 300, ph = 58, py = -H / 2, pg = ctx.createLinearGradient(0, py - ph / 2, 0, py + ph / 2); pg.addColorStop(0, C.col); pg.addColorStop(1, C.dark);
+    ctx.beginPath(); rr(ctx, -pw / 2, py - ph / 2, pw, ph, ph / 2); ctx.fillStyle = pg; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.stroke();
+    drawText(ctx, 'SIEGER', 0, py + 2, { size: 34, font: 'title', color: '#ffffff', strokeWidth: 6, strokeColor: hexA(C.dark, 0.9), drop: false });
+    drawText(ctx, `${C.name} GEWINNT!`, 0, -H / 2 + 86, { size: 76, font: 'title', color: C.light, strokeWidth: 9, strokeColor: '#1c120c', drop: false, maxWidth: 780 });
+    // Sieger-Dino
+    const feet = -H / 2 + 330, hop = Math.abs(Math.sin(t * 6)) * 22;
+    const gs = 200 + Math.sin(t * 4) * 12; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha *= 0.5; ctx.drawImage(softBlob(C.col), -gs, feet - 110 - gs, gs * 2, gs * 2); ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(0, feet + 4, 120, 14, 0, 0, TAU); ctx.fill();
+    if (DinoArt.has(C.species)) { const [w100, h100] = DinoArt.dims(C.species, 100), sz = 100 * Math.min(200 / h100, 360 / w100), p = DinoArt.pose(C.species, t, 0, sz); DinoArt.draw(ctx, C.species, 0, feet - hop - Math.min(p.bob, 40), { size: sz, tint: C.tint, face: 1, sx: p.sx, sy: p.sy }); }
+    drawText(ctx, `${res.pts} Punkte · ${res.winsToday}. Sieg heute`, 0, feet + 40, { size: 32, color: HUD.SOFT, stroke: false });
+    if (res.top.length) {
+      const segs = []; res.top.forEach((h, i) => { if (i) segs.push('     '); segs.push({ i: 'coin' + (i + 1) }, ' ' + h.n); });
+      drawRich(ctx, segs, 0, feet + 88, { size: 30, maxWidth: 780, color: HUD.TXT, stroke: false });
+    }
+    const fy = H / 2 - 74, lines = wrapText(ctx, res.fact, 28, 720);
+    ctx.beginPath(); rr(ctx, -W / 2 + 30, fy - 40, W - 60, 84, 20); ctx.fillStyle = hexA(C.col, 0.16); ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = hexA(C.col, 0.6); ctx.stroke();
+    lines.slice(0, 2).forEach((l, i) => drawText(ctx, l, 0, fy + (lines.length > 1 ? -14 + i * 32 : 2), { size: 28, color: '#fff3d6', stroke: false }));
+    ctx.restore();
+  },
+};
 
 /* ==========================================================================
    15. Boot – Layout, Eingaben, Spielschleife
@@ -4652,11 +5215,10 @@ function frame(ts) {
     for (let i = 0; i < before - EventQueue.q.length; i++) Host._ipm.push(now());
     TestSim.update(dt);
     Bots.update(dt);
-    Game.update(dt);
-    World.update(dt);
+    if (RACE_MODE) Race.update(dt); else { Game.update(dt); World.update(dt); }
     FX.update(dt);
     StatsLog.tick();
-    HUD.drawScene(ctx, now());
+    if (RACE_MODE) RaceView.draw(ctx, now()); else HUD.drawScene(ctx, now());
     Loop.frames++;
     if (ts - Loop.fpsAt > 1000) { Loop.fps = Loop.frames * 1000 / (ts - Loop.fpsAt); Loop.frames = 0; Loop.fpsAt = ts; }
   } catch (err) {
@@ -4682,16 +5244,21 @@ function boot() {
     if (k === 'meteor') HUD.meteorIcon = null;
   });
   Assets.load();
+  const spiel = (new URLSearchParams(location.search).get('spiel') || '').toLowerCase();
+  RACE_MODE = spiel === 'ei' ? false : spiel === 'rennen' ? true : !!CONFIG.race.enabled;
   StatsLog.init();
   TestSim.init();
   Sound.resume();          // OBS-Browserquelle erlaubt Autoplay → Ton sofort; normale Browser warten auf den ersten Klick
   World.init();
   TestBar.build();
+  if (RACE_MODE) Race.init();
+  else {
   // Spielstand wiederherstellen (absturzsicher)
   const round = Persist.load();
   if (round && round.eggs && round.eggs.length) { Game.mode = round.mode; Game.spawnEggs(round); Game.announce = null; }
   else if (round && round.introMode) { Game.eggNumber = Math.max(0, Game.eggNumber - 1); Game.totals.eggs = Math.max(0, Game.totals.eggs - 1); Game.startRound(round.introMode); }
   else Game.startRound(Game.pickNextMode());
+  }
   // Langes Drücken oben links (1 s) öffnet das Panel – für Touch ohne Tastatur
   let lp = null;
   canvas.addEventListener('pointerdown', e => {
@@ -4700,13 +5267,13 @@ function boot() {
   });
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => canvas.addEventListener(ev, () => clearTimeout(lp)));
   addEventListener('resize', layout);
-  addEventListener('beforeunload', () => { Persist.save(); StatsLog.persist(); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { Persist.save(); StatsLog.persist(); } });
+  addEventListener('beforeunload', () => { if (RACE_MODE) Race.save(); else Persist.save(); StatsLog.persist(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { if (RACE_MODE) Race.save(); else Persist.save(); StatsLog.persist(); } });
   layout();
   Net.connect();
   setInterval(() => { Panel.update(); PanelLink.post({ kind: 'status', status: Host.status() }); }, 500);
   // Debug-Zugriff für Tests in der Konsole
-  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass, Bots };
+  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass, Bots, Race, RaceView };
   Loop.last = performance.now(); Loop.fpsAt = Loop.last;
   requestAnimationFrame(frame);
 }

@@ -188,7 +188,15 @@ Zeit bis Meteor, Modus, Ei-HP, nächster Modus, FPS.
 
 ---
 
-## So funktioniert das Spiel
+## Farb-Rennen (Standard-Spiel)
+
+6 Dinos in den beliebtesten Lieblingsfarben (Blau, Rot, Grün, Lila, Gelb, Pink) rennen von links nach rechts.
+Wer eine Farbe kommentiert („blau“, „blauuu“, „team rot“, 💙 …), schiebt diesen Dino an und ist in dem Team; Kommentare ohne
+Farbe zählen fürs eigene Team (Neue ohne Farbe kommen ins kleinste Team). Likes = kleiner Turbo. Die Farbe mit den meisten
+Punkten ist zuerst im Ziel (Zeitlimit 90 s) → Siegerkarte mit Farbfakt, „Siege heute“ je Farbe, Top-Anfeuerer.
+Das Dino-Ei-Spiel gibt es weiter: im Panel „Farb-Rennen“ ausschalten oder  öffnen.
+
+## So funktioniert das Spiel (Dino-Ei)
 
 **Ablauf (Normales Ei):** Ansage „Ei #12“ → Ei fällt ins Nest → Zuschauer knacken es → 5 Riss-Stufen
 (20/40/60/80/100 %) mit Splittern & Screenshake → Schlüpfen mit Konfetti → Karte (~6 s) mit Art,
