@@ -158,6 +158,11 @@ const CONFIG = {
   save: { everySec: 10, key: 'dinoEi.v1', settingsKey: 'dinoEi.settings.v1', logKey: 'dinoEi.logs.v1' },
   perf: { maxParticles: 650, eventsPerFrame: 50, maxQueue: 2500 },
   test: { viewers: 20, activity: 45 },
+  bots: {                               // Start-Bots: füllen auf, solange noch keine 20 echten Mitspieler da sind
+    enabled: true, fill: 20,              // Bots = fill − echte Mitspieler (jeder echte ersetzt nach und nach einen Bot)
+    activity: 55,                         // % – wie fleißig die Bots kommentieren (nur Kommentare, als „Bot …“ erkennbar)
+    realWindowSec: 300,                   // „echter Mitspieler“ = hat in den letzten 5 min mitgemacht
+  },
   milestones: [3, 5, 10, 25, 50, 100, 250],
 };
 const CONFIG_DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
@@ -2073,8 +2078,9 @@ const Users = {
     let u = this.map.get(ev.uid);
     if (!u) {
       const c = NameFilter.clean(raw);
+      const bot = String(ev.uid).startsWith('bot:');
       u = { id: ev.uid, raw, name: c.name, filtered: c.filtered, muted: Persist.isMuted(ev.uid), team: 0, lastActive: 0,
-            lastHitAt: -1e9, greeted: false, likeBuf: 0, helper: null, hue: hashStr(String(ev.uid)) % 360, interactions: 0 };
+            lastHitAt: -1e9, greeted: bot, likeBuf: 0, helper: null, hue: hashStr(String(ev.uid)) % 360, interactions: 0, bot };
       this.map.set(ev.uid, u);
     } else if (raw !== u.raw) { const c = NameFilter.clean(raw); u.raw = raw; u.name = c.name; u.filtered = c.filtered; }
     if (ev.avatar) u.hasAvatar = true;          // Bridge kennt ein Profilbild → wird bei Bedarf geladen
@@ -2426,7 +2432,9 @@ const Game = {
   /* ---------- Eingehende Events ---------- */
   handleEvent(ev) {
     if (!ev || !ev.type || ev.uid == null) return;
-    StatsLog.count(ev);
+    const isBot = String(ev.uid).startsWith('bot:');
+    if (isBot && !Bots.ids.includes(ev.uid)) return;          // Bot ist schon gegangen
+    if (!isBot) StatsLog.count(ev);
     if (ev.type === 'member') return;                     // reiner Beitritt ohne Interaktion
     const u = Users.touch(ev);
     this.sessionUsers.add(u.id);
@@ -2537,9 +2545,11 @@ const Game = {
     const p0 = egg.progress;
     this.lastDamageAt = gnow();
     egg.hp = Math.max(0, egg.hp - dmg);
-    const c = egg.contrib.get(u.id) || { n: u.name, d: 0 }; c.n = u.name; c.d += dmg; egg.contrib.set(u.id, c);
-    if (!u.muted) egg.lastHitter = { id: u.id, n: u.name }; else egg.lastHitter = { id: u.id, n: CONFIG.names.anonymous };
-    Board.add(u, dmg);
+    if (!u.bot) {                                         // Bots: keine Bestenliste, keine Krone, benennen keine Dinos
+      const c = egg.contrib.get(u.id) || { n: u.name, d: 0 }; c.n = u.name; c.d += dmg; egg.contrib.set(u.id, c);
+      if (!u.muted) egg.lastHitter = { id: u.id, n: u.name }; else egg.lastHitter = { id: u.id, n: CONFIG.names.anonymous };
+      Board.add(u, dmg);
+    }
     // Effekte
     const W = CONFIG.wobble, big = dmg >= CONFIG.damage.bigHitAt;
     egg.va += (Math.random() < 0.5 ? -1 : 1) * W.hitImpulse * (0.4 + Math.min(dmg, 6) * 0.25) * (kind === 'like' ? 0.5 : 1);
@@ -4235,6 +4245,53 @@ const TestSim = {
   },
 };
 
+/* --------------------------------------------------------------------------
+   Start-Bots (nur LIVE mit Bridge, nicht im Testmodus): Solange weniger als
+   CONFIG.bots.fill echte Mitspieler da sind, füllen Bots die Höhle auf, damit
+   von der ersten Sekunde an etwas passiert. Jeder echte Mitspieler ersetzt nach
+   und nach einen Bot (der dienstälteste geht zuerst); wird es später ruhig,
+   kommen Bots zurück. Bots heißen sichtbar „Bot …“, kommentieren nur (keine
+   Likes/Follows/Shares/Gifts), stehen in keiner Bestenliste, bekommen keine
+   Krone, benennen keine Dinos und zählen nicht in der Statistik.
+   -------------------------------------------------------------------------- */
+const Bots = {
+  ids: [], acc: 0, adjAt: 0,
+  NAMES: ['Rexi', 'Trixi', 'Steggi', 'Brachi', 'Flitz', 'Anky', 'Paru', 'Spino', 'Ptera', 'Dilo', 'Knacki', 'Krümel', 'Kiesel', 'Funke', 'Glut',
+    'Fossil', 'Tropf', 'Zacke', 'Brummi', 'Schuppi', 'Klacker', 'Wackel', 'Pieps', 'Stampf', 'Schnapp', 'Huschi', 'Kralle', 'Knolle', 'Puschel', 'Rumms',
+    'Bröckel', 'Lavi', 'Echo', 'Fauchi', 'Grolli', 'Nuggi', 'Schnuffi', 'Tapsi', 'Wumms', 'Zisch'],
+  realCount() {
+    const lim = gnow() - CONFIG.bots.realWindowSec; let n = 0;
+    for (const u of Users.map.values()) if (!u.bot && !u.muted && u.lastActive > 0 && u.lastActive >= lim) n++;
+    return n;
+  },
+  target() { return CONFIG.bots.enabled && !Net.testMode ? clamp(Math.round(CONFIG.bots.fill) - this.realCount(), 0, 40) : 0; },
+  update(dt) {
+    if (now() - this.adjAt > 1.5) {                          // nach und nach: höchstens ein Bot pro 1,5 s kommt/geht
+      this.adjAt = now(); const tgt = this.target();
+      if (this.ids.length < tgt) this.add(); else if (this.ids.length > tgt) this.remove();
+    }
+    if (!this.ids.length || Game.paused) return;
+    this.acc += this.ids.length * 0.075 * clamp(CONFIG.bots.activity / 100, 0, 1) * dt;
+    let guard = 0;
+    while (this.acc >= 1 && guard++ < 20) { this.acc -= 1; this.chat(pick(this.ids)); }
+  },
+  add() {
+    let i = 0; while (this.ids.includes('bot:' + i)) i++;
+    const id = 'bot:' + i; this.ids.push(id);
+    this.chat(id);                                         // kommt gleich mit einem Treffer ins Bild
+  },
+  remove() {
+    const id = this.ids.shift(), u = Users.map.get(id);
+    if (u) { if (u.helper) { u.helper.leave(); u.helper = null; } Users.map.delete(id); }
+    Users._activeAt = -9; Game.layoutHelpers();
+  },
+  chat(id) {
+    const i = parseInt(id.slice(4), 10) || 0, u = Users.map.get(id);
+    const text = Game.mode === 'duel' && (!u || !u.team) ? (Math.random() < 0.5 ? '1' : '2') : 'knack';
+    EventQueue.push(normalizeEvent({ type: 'chat', uid: id, name: 'Bot ' + this.NAMES[i % this.NAMES.length], text }));
+  },
+};
+
 /* ==========================================================================
    14. StatsLog – pro Stream: Events/Minute, unique Nutzer, Schlüpfzeiten,
        Meteor-Einschläge, Modus. Download als CSV/JSON im Panel.
@@ -4363,7 +4420,7 @@ const Host = {
     const e = Game.eggs;
     return {
       bridge: Net.state, tiktok: Net.tiktok, testMode: Net.testMode, forceTest: Net.forceTest, everConnected: Net.everConnected,
-      active: Users.activeCount(), ipm: Host.ipm(), timeLeft: Game.phase === 'play' ? Game.timeLeft : null, mode: Game.mode, phase: Game.phase,
+      active: Users.activeCount(), bots: Bots.ids.length, ipm: Host.ipm(), timeLeft: Game.phase === 'play' ? Game.timeLeft : null, mode: Game.mode, phase: Game.phase,
       paused: Game.paused, muted: Sound.muted, audioReady: Sound.ready, eggNumber: Game.eggNumber, next: Game.peekNextMode(),
       eggs: e.map(x => ({ team: x.team, hp: Math.round(x.hp * 10) / 10, maxHp: x.maxHp, p: Math.round(x.progress * 100) })),
       helpers: Game.helpers.length, herd: World.herd.length, queue: EventQueue.q.length, fps: Math.round(Loop.fps),
@@ -4408,6 +4465,7 @@ const SETTINGS_UI = [
   ['Rotation', [['rotation.normalsBeforeSpecial', 'Normale vor Spezial', 0, 10, 1], ['rotation.bossAnnounceSec', 'Boss-Ansage (s)', 5, 60, 1], ['rotation.bossEnabled', 'Boss-Ei aktiv', 'bool'], ['rotation.duelEnabled', 'Ei-Duell aktiv', 'bool']]],
   ['Ton', [['audio.master', 'Gesamt', 0, 1, 0.05], ['audio.sfx', 'Effekte', 0, 1, 0.05], ['audio.music', 'Musik', 0, 1, 0.05], ['audio.musicEnabled', 'Eigenmusik an', 'bool']]],
   ['Anzeige', [['infoBanner.always', 'Regeln immer zeigen', 'bool'], ['infoBanner.everySec', 'Regeln aufleuchten alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool'], ['assets.enabled', 'Bilder-Look (Höhle & 3D-Dinos)', 'bool']]],
+  ['Start-Bots (nur LIVE, als „Bot …“ erkennbar)', [['bots.enabled', 'Start-Bots an', 'bool'], ['bots.fill', 'Auffüllen bis (Mitspieler)', 0, 40, 1], ['bots.activity', 'Bot-Aktivität %', 10, 100, 5]]],
   ['Action', [['missions.enabled', 'Mini-Missionen', 'bool'], ['missions.minGapSec', 'Mission frühestens alle (s)', 20, 300, 5], ['missions.maxGapSec', 'Mission spätestens alle (s)', 30, 400, 5], ['missions.rewardPct', 'Missions-Bonus (Anteil HP)', 0.05, 0.5, 0.01], ['missions.difficulty', 'Missions-Schwierigkeit', 0.4, 2, 0.05],
     ['hype.enabled', 'Hype-Leiste', 'bool'], ['hype.durationSec', 'Hype-Dauer (s)', 5, 30, 1], ['hype.multiplier', 'Hype-Schaden ×', 1, 4, 0.5], ['bubbles.enabled', 'Sprechblasen des Eis', 'bool'],
     ['miniEvents.minSec', 'Hintergrund-Ereignis ab (s)', 15, 300, 5], ['miniEvents.maxSec', '… bis (s)', 20, 400, 5]]],
@@ -4514,7 +4572,7 @@ const Panel = {
     this.stat('bridge', bridgeTxt, S.bridge === 'connected' ? 'ok' : S.everConnected ? 'bad' : 'mid');
     const tk = S.tiktok || {};
     this.stat('tiktok', tk.status || '–', tk.status === 'verbunden' ? 'ok' : (tk.status === 'keine Bridge' ? 'mid' : 'bad'));
-    this.stat('active', String(S.active));
+    this.stat('active', S.bots ? `${S.active} (${S.bots} Bots)` : String(S.active));
     this.stat('ipm', String(S.ipm));
     this.stat('time', S.timeLeft != null ? fmtTime(S.timeLeft) : '–', S.timeLeft != null && S.timeLeft < 30 ? 'bad' : '');
     const modeName = { normal: 'Normal', boss: 'Boss-Ei', duel: 'Ei-Duell' };
@@ -4593,6 +4651,7 @@ function frame(ts) {
     EventQueue.process(CONFIG.perf.eventsPerFrame);
     for (let i = 0; i < before - EventQueue.q.length; i++) Host._ipm.push(now());
     TestSim.update(dt);
+    Bots.update(dt);
     Game.update(dt);
     World.update(dt);
     FX.update(dt);
@@ -4647,7 +4706,7 @@ function boot() {
   Net.connect();
   setInterval(() => { Panel.update(); PanelLink.post({ kind: 'status', status: Host.status() }); }, 500);
   // Debug-Zugriff für Tests in der Konsole
-  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass };
+  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass, Bots };
   Loop.last = performance.now(); Loop.fpsAt = Loop.last;
   requestAnimationFrame(frame);
 }

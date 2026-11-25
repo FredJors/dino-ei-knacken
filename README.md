@@ -213,6 +213,17 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
   dieses Ei / heute / gesamt (die Reiter zeigen, welche Liste gerade läuft).
   Der Top-Knacker des aktuellen Eis bekommt eine **👑 Krone** auf seinem Helfer-Dino.
 
+### Start-Bots
+
+Damit am Anfang des LIVEs schon etwas passiert, füllen **Bots** die Höhle auf, solange weniger als
+20 echte Mitspieler da sind (echt = hat in den letzten 5 min mitgemacht). Jeder neue echte Mitspieler
+ersetzt nach und nach einen Bot; wird es später ruhig, kommen Bots zurück. Bots heißen sichtbar
+„Bot Rexi“, „Bot Trixi“ …, hauen nur aufs Ei (keine Likes, Follows, Shares oder Geschenke), stehen in
+keiner Bestenliste, bekommen keine Krone, benennen keine Dinos und zählen nicht in der Statistik.
+Im Panel: **„Start-Bots“** an/aus, „Auffüllen bis“ (Standard 20) und Bot-Aktivität. Das Status-Feld
+„Aktive Nutzer“ zeigt, wie viele davon Bots sind. Im Testmodus (ohne Bridge) gibt es keine Bots –
+dort simuliert der Testmodus die Zuschauer.
+
 ### Mehr Action
 
 - **🎯 Mini-Missionen** (alle ~1–1,5 min, nicht im Duell): z. B. „25 Kommentare in 30 s!“, „100 Likes in 20 s!“,
