@@ -137,7 +137,7 @@ const CONFIG = {
   pops: { max: 8 },
   herd: { maxVisible: 15 },
   wobble: { windowSec: 5, stiffness: 55, damping: 5.5, drive: 9, hitImpulse: 2.2 },
-  infoBanner: { everySec: 45, showSec: 8 },
+  infoBanner: { always: true, everySec: 45, showSec: 8 },   // always: Regeln dauerhaft (außer bei Missionen); everySec = Lichtschimmer bzw. Banner-Abstand
   leaderboard: { rotateSec: 9 },
   dayNight: { cycleSec: 600 },
   miniEvents: { minSec: 35, maxSec: 70 },  // Hintergrund-Ereignisse (Regen, Parade, Glühwürmchen …)
@@ -3586,6 +3586,15 @@ const HUD = {
     if (tag) Glass.title(ctx, tag, x + 26, y + 32, 27, tagColor || '#f2c14e', 'left');
   },
   drawInfo(ctx, t) {
+    if (CONFIG.infoBanner.always) {                   // Regeln stehen immer da – nur eine Mission verdrängt sie kurz
+      const dt = clamp(t - (this._infoT || t), 0, 0.1); this._infoT = t;
+      const target = Missions.active || Missions.result ? 0 : 1;
+      this.infoK = clamp((this.infoK || 0) + (target ? dt / 0.55 : -dt / 0.25), 0, 1);
+      if (this.infoK <= 0.001) return;
+      const k = easeOutCubic(this.infoK), [x0, , w] = this.L.left;
+      this.infoCard(ctx, lerp(-w - 40, x0, k), k, t);
+      return;
+    }
     if (Game.phase === 'reveal' || Missions.active || Missions.result) {     // Karte/Mission haben Vorrang → danach zeigen
       if (t > this.infoNext - 1) this.infoNext = t + 1;
       if (t - this.infoStart < CONFIG.infoBanner.showSec) this.infoStart = -99;
@@ -3595,13 +3604,24 @@ const HUD = {
     const k = t - this.infoStart, dur = CONFIG.infoBanner.showSec;
     if (k < 0 || k > dur) return;
     const inK = easeOutCubic(clamp(k / 0.5, 0, 1)), outK = clamp((dur - k) / 0.4, 0, 1);
-    const [x0, y, w] = this.L.left, h = this.L.cardH, x = lerp(-w - 40, x0, inK);
+    const [x0, , w] = this.L.left;
+    this.infoCard(ctx, lerp(-w - 40, x0, inK), outK, t);
+  },
+  /* Regel-Karte "So geht's"; alle infoBanner.everySec läuft ein Lichtschimmer darüber (Blickfang) */
+  infoCard(ctx, x, alpha, t) {
+    const [, y, w] = this.L.left, h = this.L.cardH;
     const lines = Game.mode === 'duel'
       ? [['comment', 'Schreib 1 oder 2 = Team'], ['comment', 'Kommentar = Stoß'], ['heart', 'Likes = Wackeln'], ['star', 'Follow = Riesenriss']]
       : [['comment', 'Kommentar = Stoß'], ['heart', 'Likes = Wackeln'], ['star', 'Follow = Riesenriss'], ['share', 'Teilen = Extra-Stoß']];
-    ctx.save(); ctx.globalAlpha = outK;
+    ctx.save(); ctx.globalAlpha = alpha;
     this.card(ctx, x, y, w, h, "SO GEHT'S");
     lines.forEach(([ic, txt], i) => { const ly = y + 72 + i * 34; Icon.draw(ctx, ic, x + 44, ly, 30); drawText(ctx, txt, x + 72, ly + 1, { size: 30, align: 'left', color: this.TXT, stroke: false, maxWidth: w - 96 }); });
+    const sk = (t % Math.max(10, CONFIG.infoBanner.everySec)) / 1.4;
+    if (sk < 1) {
+      const sx = x - 120 + sk * (w + 240), g = ctx.createLinearGradient(sx - 90, 0, sx + 90, 0);
+      g.addColorStop(0, 'rgba(255,230,180,0)'); g.addColorStop(0.5, 'rgba(255,230,180,0.16)'); g.addColorStop(1, 'rgba(255,230,180,0)');
+      ctx.beginPath(); rr(ctx, x, y, w, h, 26); ctx.clip(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+    }
     ctx.restore();
   },
   drawMission(ctx, t) {
@@ -3833,7 +3853,7 @@ const HUD = {
     const info = Game.hatchInfo; if (!info || Game.phase !== 'reveal') return;
     const k = Game.phaseT, dur = CONFIG.reveal.cardSec;
     const inK = easeOutBack(clamp(k / 0.45, 0, 1)), outK = clamp((dur - k) / 0.35, 0, 1);
-    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 872, W = 860, H = 720;
+    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 918, W = 860, H = 700;   // unter der Regel-Karte, über dem Chat
     ctx.save(); ctx.globalAlpha = outK; ctx.translate(cx, cy); ctx.scale(inK, inK);
     ctx.save(); ctx.rotate(t * 0.3); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = R.aura || '#ffcf8a'; ctx.globalAlpha *= R.aura ? 0.2 : 0.1;
     for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-70, -700); ctx.lineTo(70, -700); ctx.closePath(); ctx.fill(); }
@@ -4387,7 +4407,7 @@ const SETTINGS_UI = [
   ['Seltenheit (Gewichte)', [['rarity.weights.common', 'Gewöhnlich', 0, 100, 1], ['rarity.weights.rare', 'Selten', 0, 100, 1], ['rarity.weights.epic', 'Episch', 0, 100, 1], ['rarity.weights.legendary', 'Legendär', 0, 100, 1]]],
   ['Rotation', [['rotation.normalsBeforeSpecial', 'Normale vor Spezial', 0, 10, 1], ['rotation.bossAnnounceSec', 'Boss-Ansage (s)', 5, 60, 1], ['rotation.bossEnabled', 'Boss-Ei aktiv', 'bool'], ['rotation.duelEnabled', 'Ei-Duell aktiv', 'bool']]],
   ['Ton', [['audio.master', 'Gesamt', 0, 1, 0.05], ['audio.sfx', 'Effekte', 0, 1, 0.05], ['audio.music', 'Musik', 0, 1, 0.05], ['audio.musicEnabled', 'Eigenmusik an', 'bool']]],
-  ['Anzeige', [['infoBanner.everySec', 'Info-Banner alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool'], ['assets.enabled', 'Bilder-Look (Höhle & 3D-Dinos)', 'bool']]],
+  ['Anzeige', [['infoBanner.always', 'Regeln immer zeigen', 'bool'], ['infoBanner.everySec', 'Regeln aufleuchten alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool'], ['assets.enabled', 'Bilder-Look (Höhle & 3D-Dinos)', 'bool']]],
   ['Action', [['missions.enabled', 'Mini-Missionen', 'bool'], ['missions.minGapSec', 'Mission frühestens alle (s)', 20, 300, 5], ['missions.maxGapSec', 'Mission spätestens alle (s)', 30, 400, 5], ['missions.rewardPct', 'Missions-Bonus (Anteil HP)', 0.05, 0.5, 0.01], ['missions.difficulty', 'Missions-Schwierigkeit', 0.4, 2, 0.05],
     ['hype.enabled', 'Hype-Leiste', 'bool'], ['hype.durationSec', 'Hype-Dauer (s)', 5, 30, 1], ['hype.multiplier', 'Hype-Schaden ×', 1, 4, 0.5], ['bubbles.enabled', 'Sprechblasen des Eis', 'bool'],
     ['miniEvents.minSec', 'Hintergrund-Ereignis ab (s)', 15, 300, 5], ['miniEvents.maxSec', '… bis (s)', 20, 400, 5]]],

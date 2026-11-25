@@ -155,7 +155,7 @@ Wichtig: **Nur EIN Spiel-Fenster gleichzeitig** öffnen, wenn die Bridge läuft 
 
 - Unteres Drittel (Chat) und rechter Rand (TikTok-Buttons): nur Deko (Höhlenboden, Lava, Herde).
 - Oben: großer Aufruf „Kommentiere, um das Ei zu knacken!“, darunter Meteor-Timer und Fortschritt.
-- Rechts oben die große Bestenliste „TOP KNACKER“, links Mission/„So geht's“ und Lexikon.
+- Rechts oben die große Bestenliste „TOP KNACKER“, links die Spielregeln „So geht's“ (immer sichtbar – nur eine Mission verdrängt sie kurz) und das Lexikon.
 - Ei im Steinnest auf der Felskante, knapp über der Bildmitte.
 
 ---
@@ -258,7 +258,7 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 
 ## Einstellungen & Balancing
 
-- **Im Panel** (Regler): Timer, HP-Formel, Schadenswerte, Seltenheiten, Rotation, Lautstärken, Info-Banner,
+- **Im Panel** (Regler): Timer, HP-Formel, Schadenswerte, Seltenheiten, Rotation, Lautstärken, Regeln immer zeigen / Aufleuchten,
   Tag-Nacht-Dauer (nur Wiese), max. Helfer, Bilder-Look an/aus, und unter **„Action“**: Missionen an/aus, Abstand, Bonus, **Missions-Schwierigkeit**,
   Hype an/aus, Dauer, Schadens-Faktor, Sprechblasen an/aus, Abstand der Hintergrund-Ereignisse. Änderungen werden im Browser gespeichert („Einstellungen auf Standard“ setzt zurück).
 - **Im Code:** Objekt `CONFIG` am Anfang von `game/index.html` – alle Werte mit Kommentar.
