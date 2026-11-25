@@ -24,6 +24,7 @@ BG = {
     'bg_cave': {'scale': 1.62, 'top': 57},
     'bg_cave_boss': {'scale': 1.62, 'top': 140},
     'bg_race': {'scale': 1.45, 'top': 75},       # Sandfläche ≈ y 615–1395 → 6 Bahnen zwischen 640 und 1270
+    'bg_monster': {'scale': 1.4063, 'top': 8},   # Wiese ≈ y 1000–1500, Monster steht bei y ≈ 1265
 }
 
 # Motive: Ziel-Höhe (bzw. Breite) nach dem Zuschnitt, Löcher füllen (zwischen Beinen o. Ä.)?
@@ -35,6 +36,12 @@ SPRITES = {
     **{f'dino_{k}': {'max': 440, 'holes': True} for k in [
         'trex', 'triceratops', 'stegosaurus', 'brachiosaurus', 'velociraptor',
         'ankylosaurus', 'parasaurolophus', 'spinosaurus', 'dilophosaurus', 'pteranodon']},
+    **{f'food_{k}': {'max': 260, 'holes': False} for k in ['candy', 'cookie', 'apple', 'donut', 'burger', 'pizza', 'icecream', 'cake']},
+}
+
+# Gruppen: alle Bilder bekommen DENSELBEN Zuschnitt (Vereinigung aller Umrisse) → Posen springen beim Wechsel nicht
+GROUPS = {
+    'monster': {'h': 760, 'names': ['idle', 'blink', 'open', 'chew', 'chew2', 'yum', 'happy', 'wow', 'hungry', 'sleep', 'burp', 'crouch', 'grow', 'dance']},
 }
 
 
@@ -123,6 +130,37 @@ def process_sprite(name, cfg):
     print(f'  {name}: {nw}x{nh}  {os.path.getsize(out) // 1024} KB')
 
 
+def process_group(group, cfg):
+    items = []
+    for n in cfg['names']:
+        src = find_src(f'{group}_{n}')
+        if not src:
+            print('  fehlt:', f'{group}_{n}')
+            continue
+        rgb = np.asarray(Image.open(src).convert('RGB'), dtype=np.float32)
+        col, a = key_out(rgb, True)
+        items.append((n, col, a))
+    if not items:
+        return
+    H, W = items[0][2].shape
+    y0, y1, x0, x1 = H, 0, W, 0
+    for _, _, a in items:
+        if a.shape != (H, W):
+            print('  Achtung: unterschiedliche Bildgrößen in', group)
+        ys, xs = np.where(a > 0.04)
+        y0, y1, x0, x1 = min(y0, ys.min()), max(y1, ys.max()), min(x0, xs.min()), max(x1, xs.max())
+    pad = 8
+    y0, y1, x0, x1 = max(0, y0 - pad), min(H, y1 + pad + 1), max(0, x0 - pad), min(W, x1 + pad + 1)
+    s = min(1.0, cfg['h'] / (y1 - y0))
+    nw, nh = round((x1 - x0) * s), round((y1 - y0) * s)
+    for n, col, a in items:
+        rgba = np.dstack([col, a * 255]).astype(np.uint8)[y0:y1, x0:x1]
+        img = Image.fromarray(rgba, 'RGBA').convert('RGBa').resize((nw, nh), Image.LANCZOS).convert('RGBA')
+        out = os.path.join(DST, f'{group}_{n}.webp')
+        img.save(out, 'WEBP', quality=90, method=6)
+        print(f'  {group}_{n}: {nw}x{nh}  {os.path.getsize(out) // 1024} KB')
+
+
 def process_bg(name, cfg):
     src = find_src(name)
     if not src:
@@ -151,6 +189,10 @@ def main():
     for n, c in SPRITES.items():
         if not only or n in only:
             process_sprite(n, c)
+    print('Gruppen:')
+    for g, c in GROUPS.items():
+        if not only or g in only:
+            process_group(g, c)
 
 
 if __name__ == '__main__':

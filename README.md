@@ -188,13 +188,42 @@ Zeit bis Meteor, Modus, Ei-HP, nächster Modus, FPS.
 
 ---
 
-## Farb-Rennen (Standard-Spiel)
+## Spiele (im Host-Panel unter „Spiel“ umschaltbar)
+
+| Spiel | Adresse (überschreibt die Panel-Wahl) |
+|---|---|
+| 🍔 **Monster füttern** (Standard) | `http://localhost:8787/?spiel=monster` |
+| 🏁 Farb-Rennen | `http://localhost:8787/?spiel=rennen` |
+| 🥚 Dino-Ei | `http://localhost:8787/?spiel=ei` |
+
+## Monster füttern
+
+Likes, Kommentare, Follows und Shares werfen Essen in ein kleines Monster: Es reißt das Maul auf, kaut,
+freut sich – und wächst Level für Level (Ducken → Wachsen mit Funkeln → Jubeln).
+
+| Interaktion | Essen |
+|---|---|
+| Likes | Snacks (Bonbon, Apfel, Donut) – gebündelt, fliegen von unten rechts ins Maul |
+| Kommentar | Keks – wer ein Essen nennt („pizza“, „eis“, 🍩 …), wirft genau das (+ Bonus) |
+| Lieblingsessen des Tages | zählt doppelt (steht in „So geht's“) |
+| Follow / Teilen | Burger / Pizza + Dank-Einblendung |
+| Geschenk | Kuchen, gedeckelt – keine Aufforderung, das Spiel läuft komplett ohne |
+
+- **Fressrausch:** Die Hype-Säule füllt sich durch Aktivität → 12 s doppeltes Wachstum, Essen regnet vom Himmel.
+- **Stimmungen:** Kommt lange nichts, wird es hungrig („Ich hab Hunger …“) und schläft schließlich ein (Zzz) –
+  der nächste Like weckt es. Nach großen Mahlzeiten: Rülpser.
+- **Level-Tempo** passt sich der Aktivität an (≈ 2,5 min pro Level, Panel: „Sekunden pro Level“).
+- **Max-Level (Standard 10):** RIESEN-MONSTER-Party, dann wählt der Chat 20 s lang per Farbe
+  (blau, rot, grün, lila, gelb, pink), welche Farbe das nächste Baby-Monster bekommt.
+- **TOP FEEDERS** (dieses Monster / heute / gesamt), Start-Bots füttern als „Bot …“ mit (nicht in der Bestenliste).
+- Tasten: **X** Fressrausch, **E** Essensregen, **N** Level-up (zum Testen), **R** Monster auf Level 1, **P** Pause, **M** Ton.
+
+## Farb-Rennen
 
 6 Dinos in den beliebtesten Lieblingsfarben (Blau, Rot, Grün, Lila, Gelb, Pink) rennen von links nach rechts.
 Wer eine Farbe kommentiert („blau“, „blauuu“, „team rot“, 💙 …), schiebt diesen Dino an und ist in dem Team; Kommentare ohne
 Farbe zählen fürs eigene Team (Neue ohne Farbe kommen ins kleinste Team). Likes = kleiner Turbo. Die Farbe mit den meisten
 Punkten ist zuerst im Ziel (Zeitlimit 90 s) → Siegerkarte mit Farbfakt, „Siege heute“ je Farbe, Top-Anfeuerer.
-Das Dino-Ei-Spiel gibt es weiter: im Panel „Farb-Rennen“ ausschalten oder  öffnen.
 
 ## So funktioniert das Spiel (Dino-Ei)
 
