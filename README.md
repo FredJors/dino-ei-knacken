@@ -28,7 +28,12 @@ Stimme – das Spiel liefert die Show drumherum.
 
 ```
 game/index.html        Komplettes Spiel in EINER Datei (HTML/CSS/JS, Canvas 2D, keine CDNs,
-                       alle Grafiken & Sounds prozedural). Läuft per Doppelklick und als statische Seite.
+                       Sounds per WebAudio). Läuft per Doppelklick und als statische Seite.
+game/assets/           Bilder für den Höhlen-Look: Höhle (normal + Boss), 6 Eier + Boss-Ei,
+                       10 Dino-Arten, Steinnest, Meteor. Fehlt ein Bild, zeichnet das Spiel die
+                       alte Grafik (Wiese, gezeichnete Dinos) – es läuft also immer.
+tools/prepare_assets.py  Bereitet neue KI-Bilder aus dem Ordner Bilder/ auf (Magenta freistellen,
+                       zuschneiden, verkleinern) und legt sie nach game/assets.
 bridge/server.js       Node.js-Bridge: TikTok-LIVE-Events → WebSocket → Spiel.
                        Liefert das Spiel zusätzlich unter http://localhost:8787/ aus.
 bridge/.env.example    Vorlage für deine Einstellungen (nach .env kopieren).
@@ -148,9 +153,10 @@ Wichtig: **Nur EIN Spiel-Fenster gleichzeitig** öffnen, wenn die Bridge läuft 
 
 ### Sichere Bereiche (bereits eingehalten)
 
-- Unteres Drittel (Chat) und rechter Rand (TikTok-Buttons): nur Deko (Wiese, Herde, Farne).
-- Oben: großer Call-to-Action „Kommentiere, um das Ei zu knacken! 🥚“, darunter Meteor-Timer und Fortschritt.
-- Ei mittig, leicht oberhalb der Bildmitte.
+- Unteres Drittel (Chat) und rechter Rand (TikTok-Buttons): nur Deko (Höhlenboden, Lava, Herde).
+- Oben: großer Aufruf „Kommentiere, um das Ei zu knacken!“, darunter Meteor-Timer und Fortschritt.
+- Rechts oben die große Bestenliste „TOP KNACKER“, links Mission/„So geht's“ und Lexikon.
+- Ei im Steinnest auf der Felskante, knapp über der Bildmitte.
 
 ---
 
@@ -161,7 +167,7 @@ Wichtig: **Nur EIN Spiel-Fenster gleichzeitig** öffnen, wenn die Bridge läuft 
 | **H** | Host-Panel ein/aus (im Spiel-Fenster) |
 | **B** | Boss-Ei als Nächstes |
 | **D** | Ei-Duell als Nächstes |
-| **E** | Zufallsereignis (Regen, Sternschnuppe, Vulkan, Schmetterlinge, Stolpern, Flugsaurier) |
+| **E** | Zufallsereignis (Tropfen, Beben, Lava-Ausbruch, Falter, Glühwürmchen, Stolpern, Flugsaurier, Herden-Parade) |
 | **P** | Pause-Screen „Gleich geht's weiter!“ (Timer steht) |
 | **M** | Ton an/aus |
 | **R** | aktuelles Ei neu starten (Herde & Bestenlisten bleiben) |
@@ -198,11 +204,13 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 | erster Kommentar | Begrüßung „NAME ist dabei!“ |
 
 - **Wackeln:** Stärke = Aktivität der letzten ~5 s (Feder-Physik: Kippen + Hüpfen); in Ruhe „atmet“ das Ei.
-- **Helfer-Dinos:** Wer pro Ei zum ersten Mal mitmacht, bekommt einen kleinen Dino mit Namensschild,
-  der ans Ei läuft und bei jedem Treffer pickt (max. 30, nach 60 s Inaktivität laufen sie weg).
+- **Helfer-Dinos:** Wer pro Ei zum ersten Mal mitmacht, bekommt einen Dino mit Namensschild (jeder
+  Zuschauer hat immer dieselbe der 10 Arten), der ans Ei läuft und bei jedem Treffer pickt
+  (max. 30, nach 60 s Inaktivität laufen sie weg). Die Namensschilder weichen einander aus.
 - **Name-Pops:** Bei Treffern poppt der Name am Ei auf (max. 8, sonst „+N weitere“).
   **Combo:** Wer mehrmals kurz hintereinander kommentiert, bekommt einen großen „name x5 🔥“-Pop.
-- **Bestenliste:** Top-5 „Beste Knacker“ (links neben dem Ei, groß, mit Profilbild) – abwechselnd dieses Ei / heute / gesamt.
+- **Bestenliste:** Top-5 „TOP KNACKER“ (rechts oben, große Glas-Tafel, mit Profilbild) – abwechselnd
+  dieses Ei / heute / gesamt (die Reiter zeigen, welche Liste gerade läuft).
   Der Top-Knacker des aktuellen Eis bekommt eine **👑 Krone** auf seinem Helfer-Dino.
 
 ### Mehr Action
@@ -210,7 +218,7 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 - **🎯 Mini-Missionen** (alle ~1–1,5 min, nicht im Duell): z. B. „25 Kommentare in 30 s!“, „100 Likes in 20 s!“,
   „8 verschiedene Leute in 30 s!“, „1 neuer Follower in 60 s!“, „Teilt den LIVE“. Das Ziel richtet sich nach der
   aktuellen Aktivität. Geschafft → **MEGA-RISS** (15 % der Ei-HP). Keine Gift-Missionen.
-- **🔥 Hype-Leiste** (rechts neben dem Ei): füllt sich durch Kommentare, Likes, Follows, Shares. Voll →
+- **🔥 Hype-Säule** (links neben dem Ei): füllt sich durch Kommentare, Likes, Follows, Shares. Voll →
   **12 s doppelter Schaden**, Bildrand glüht, Herde springt. Bei normaler Aktivität etwa alle 1,5–2 min,
   bei viel Chat öfter.
 - **💬 Das Ei redet:** Sprechblasen wie „Hallo? Ist da wer? 🥚“ bei Flaute, „Da knackt was! 😮“ bei Rissen,
@@ -222,8 +230,9 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 - **Meteor-Countdown:** Standard 4 min. Der Meteor wird größer & heller, in den letzten 30 s wird es
   dringlicher (Herzschlag, Ticken, Grollen). Geschafft → Meteor verglüht. Nicht geschafft → BUMM!
   mit Staubwolke, „Ihr hattet 78 % geschafft!“, das nächste Ei ist weicher.
-- **Seltenheiten:** Gewöhnlich 60 %, Selten 25 %, Episch 12 %, Legendär 3 % (eigene Farben/Muster,
-  Glow + Extra-Fanfare ab Episch). 10 Arten: T-Rex, Triceratops, Stegosaurus, Brachiosaurus,
+- **Seltenheiten:** Gewöhnlich 60 %, Selten 25 %, Episch 12 %, Legendär 3 %. Gewöhnliche Dinos haben
+  ihre Originalfarbe, seltene sind blau/türkis/grün umgefärbt, epische lila/pink, legendäre golden –
+  dazu ein farbiger Schein und Funkeln, ab Episch Extra-Fanfare. 10 Arten: T-Rex, Triceratops, Stegosaurus, Brachiosaurus,
   Velociraptor, Ankylosaurus, Parasaurolophus, Spinosaurus, Pteranodon, Dilophosaurus.
 - **Modi im Wechsel** (Standard: 3× Normal → 1× Spezial, abwechselnd):
   - **Boss-Ei:** riesig, gepanzert, mehr HP, 6 min Timer, garantiert mindestens Episch.
@@ -235,10 +244,11 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
   „Aktiv“ = in den letzten 60 s interagiert. Ziel: ein Schlüpfen alle 3–5 Minuten.
   Im Testmodus (60 % Aktivität) gemessen: 30, 150 und 500 Zuschauer ≈ 3 min pro Ei; 1 Zuschauer mit
   einem Kommentar alle ~20 s ≈ 3,5 min; 3 Zuschauer ≈ 2–2,5 min.
-- **Hintergrund bewegt sich immer:** Tag-Nacht-Zyklus (10 min) mit Sternen, Vulkan mit Rauch & Eruptionen,
-  Flugsaurier, Wolken, wiegende Farne, grasende Herde (max. 15), Mini-Ereignisse alle 35–70 s
-  (Regen + Regenbogen, Sternschnuppen, Schmetterlinge, Glühwürmchen nachts, Herden-Parade, Vulkan,
-  Flugsaurier-Schwarm, ein Dino stolpert).
+- **Hintergrund bewegt sich immer:** Lava-Höhle mit pulsierendem Lava-Licht, aufsteigender Glut,
+  Staub in den Lichtkegeln, Flugsaurier-Silhouetten und der Herde (max. 15) auf dem Höhlenboden.
+  Beim Boss-Ei blendet die Höhle in die violette Kristallhöhle über. Mini-Ereignisse alle 35–70 s:
+  Tropfen von der Decke, Beben (Steinchen & Staub fallen), Lava-Ausbruch, Glühwürmchen, Falter,
+  Herden-Parade, Flugsaurier-Schwarm, ein Dino stolpert. (Ohne Bilder: Wiese mit Tag-Nacht-Zyklus.)
 - **Wiederkehrer:** Herde, Gesamt-Bestenliste, Sammlung pro Nutzer und Dino-Lexikon (10 Arten) bleiben
   gespeichert. Meilensteine wie „max_123 hat jetzt 5 Dinos benannt!“ oder „Erster legendärer Spinosaurus!“.
 - **Sound:** alles per WebAudio erzeugt (Knacken, Risse, Schlüpf-Fanfaren je Seltenheit, Meteor, Einschlag,
@@ -249,7 +259,7 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 ## Einstellungen & Balancing
 
 - **Im Panel** (Regler): Timer, HP-Formel, Schadenswerte, Seltenheiten, Rotation, Lautstärken, Info-Banner,
-  Tag-Nacht-Dauer, max. Helfer, und unter **„Action“**: Missionen an/aus, Abstand, Bonus, **Missions-Schwierigkeit**,
+  Tag-Nacht-Dauer (nur Wiese), max. Helfer, Bilder-Look an/aus, und unter **„Action“**: Missionen an/aus, Abstand, Bonus, **Missions-Schwierigkeit**,
   Hype an/aus, Dauer, Schadens-Faktor, Sprechblasen an/aus, Abstand der Hintergrund-Ereignisse. Änderungen werden im Browser gespeichert („Einstellungen auf Standard“ setzt zurück).
 - **Im Code:** Objekt `CONFIG` am Anfang von `game/index.html` – alle Werte mit Kommentar.
 - **Balancing-Hilfe:** Panel zeigt „Ø Schlüpfzeit“; das Stream-Log (CSV) enthält Events/Minute,
@@ -313,8 +323,20 @@ Seltenheit, Name und Top-3-Helfern → der Dino läuft in die Herde → neues Ei
 | iPad: Bridge verbindet nicht | Erwartet – Safari blockiert `ws://` von der https-Seite. Die Bridge ist für den PC gedacht. |
 | Spielstand weg | Anderer Browser/andere Adresse = anderer Speicher. Panel → Export/Import nutzen. |
 | Keine Profilbilder, nur Buchstaben | Spiel über `http://localhost:8787/` öffnen (nicht GitHub Pages/Datei), Bridge muss laufen, „Profilbilder anzeigen“ im Panel an? Manche Nutzer haben kein Bild – dann bleibt der Buchstabe. |
+| Wiese statt Höhle / gezeichnete Dinos | Bilder fehlen oder „Bilder-Look“ ist im Panel aus. Spiel über `http://localhost:8787/` oder GitHub Pages öffnen; bei Doppelklick auf die Datei muss der Ordner `game/assets` daneben liegen. Bridge nach einem Update neu starten. |
 | TikTok hat etwas geändert | `cd bridge`, dann `npm update tiktok-live-connector`, Bridge neu starten, Log in `bridge/logs/` ansehen. |
 
 ---
 
-*Spielidee und Umsetzung: eigenes Projekt. Alle Grafiken und Sounds werden zur Laufzeit erzeugt – keine fremden Assets.*
+### Bilder austauschen oder ergänzen
+
+1. Neue Bilder (mit einfarbigem Magenta-Hintergrund #FF00FF oder transparent) unter dem gleichen Namen
+   in den Ordner `Bilder/` legen, z. B. `dino_trex.png`, `egg_3.png`, `bg_cave.jpg`.
+2. `python tools/prepare_assets.py` ausführen (braucht Python mit Pillow, numpy, scipy) –
+   oder nur einzelne: `python tools/prepare_assets.py dino_trex egg_3`.
+3. Spiel neu laden. Die Risse, das Glühen, alle Texte und Tafeln zeichnet das Spiel selbst.
+
+---
+
+*Spielidee und Umsetzung: eigenes Projekt. Bilder in `game/assets` wurden für dieses Spiel mit einer KI
+erstellt; Sounds, Risse, Effekte und die Oberfläche werden zur Laufzeit erzeugt.*

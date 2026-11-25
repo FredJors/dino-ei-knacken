@@ -13,3 +13,7 @@ bridge/.env
 # System
 .DS_Store
 Thumbs.db
+
+# Rohbilder der KI (aufbereitet liegen sie in game/assets)
+Bilder/
+screenshots/

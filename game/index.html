@@ -100,10 +100,10 @@ const CONFIG = {
     safeRight: 945,                       // rechts davon: TikTok-Buttons → nur Deko
     safeBottom: 1280,                     // unteres Drittel: Chat → nur Deko
     centerX: 480,                         // Mitte der sicheren Fläche (für Texte/Banner)
-    eggX: 540,                            // Ei genau in der Bildmitte; links daneben die Bestenliste, rechts die Hype-Leiste
-    groundY: 1110,                      // Boden, auf dem das Ei im Nest liegt → Ei-Mitte ≈ 925 (Bildmitte 960).
-                                          // Landschaft, Herde & Einblendungen verschieben sich automatisch mit.
+    eggX: 450,                            // Ei leicht links der Mitte; rechts oben die große Bestenliste
+    groundY: 1118,                        // Felskante (Bühne) im Höhlenbild, auf der das Ei im Steinnest liegt → Ei-Mitte ≈ 930
   },
+  assets: { enabled: true },              // Bilder aus game/assets (Höhle, Eier, Dinos). Fehlt ein Bild → gezeichnete Grafik
   timer: {                                 // Meteor-Countdown in Sekunden
     normal: 240, boss: 360, duel: 240,
     urgentAt: 30,                         // ab hier wird es dringlich
@@ -204,14 +204,17 @@ function rr(ctx, x, y, w, h, r) {
   ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
 }
 
-/* Typografie: Überschriften in "Cooper Black" (warm, rund, retro – passt zum Bilderbuch-Look),
-   Namen & Fließtext in "Berlin Sans FB Demi". Beide sind auf Windows mit Office installiert;
-   auf iPad/Mac greifen ähnliche Ersatzschriften. Emojis werden nur gefüllt, nie umrandet. */
+/* Typografie: große Spiel-Ansagen in "Cooper Black" (rund, kräftig – passt zu den 3D-Spielzeug-Dinos),
+   Tafel-Überschriften in einer klassischen Serifenschrift (Bodoni – wie im Mockup),
+   Namen & Fließtext in "Segoe UI Semibold" (klar, App-artig). Auf iPad/Mac greifen Ersatzschriften.
+   Emojis werden nur gefüllt, nie umrandet. */
 const FONTS = {
   title: '"Cooper Black", "Rockwell-ExtraBold", "Rockwell Extra Bold", "AmericanTypewriter-Bold", "Arial Rounded MT Bold", Georgia, serif',
-  body: '"Berlin Sans FB Demi", "AvenirNext-Bold", "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif',
+  serif: '"Bodoni MT", "Bodoni 72", Didot, Georgia, "Times New Roman", serif',
+  body: '"Segoe UI Semibold", "Segoe UI", -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif',
 };
-const fontStr = (size, f = 'body') => `400 ${size}px ${FONTS[f === 'title' ? 'title' : 'body']}`;
+const FONT_WEIGHT = { title: 400, serif: 700, body: 600 };
+const fontStr = (size, f = 'body') => { const k = FONTS[f] ? f : 'body'; return `${FONT_WEIGHT[k]} ${size}px ${FONTS[k]}`; };
 const EMOJI_SPLIT = /(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}])*)/u;
 const EMOJI_TEST = /^\p{Extended_Pictographic}/u;
 const OUTLINE = '#3b2617';                 // warme, dunkelbraune "Tusche" für alle Konturen
@@ -284,6 +287,45 @@ function downloadFile(filename, content, mime = 'application/json') {
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   } catch (e) { console.warn('Download fehlgeschlagen', e); }
 }
+
+/* --------------------------------------------------------------------------
+   Bilder (game/assets): Höhle, Eier, Dinos, Steinnest, Meteor.
+   Werden im Hintergrund geladen; solange ein Bild fehlt (oder nicht existiert),
+   zeichnet das Spiel die alte prozedurale Grafik → läuft immer, auch offline/per Doppelklick.
+   Wichtig: Pixel werden NIE ausgelesen (file:// würde das blockieren) – nur gezeichnet.
+   -------------------------------------------------------------------------- */
+const DINO_KEYS = ['trex', 'triceratops', 'stegosaurus', 'brachiosaurus', 'velociraptor', 'ankylosaurus', 'parasaurolophus', 'spinosaurus', 'pteranodon', 'dilophosaurus'];
+const Assets = {
+  files: Object.assign({ bg: 'bg_cave.jpg', bgBoss: 'bg_cave_boss.jpg', rocks: 'fg_rocks.webp', meteor: 'meteor.webp', egg_boss: 'egg_boss.webp' },
+    Object.fromEntries([1, 2, 3, 4, 5, 6].map(i => ['egg_' + i, `egg_${i}.webp`])),
+    Object.fromEntries(DINO_KEYS.map(k => ['dino_' + k, `dino_${k}.webp`]))),
+  img: {}, ok: {}, failed: {}, loaded: 0, listeners: [],
+  load() {
+    for (const [k, f] of Object.entries(this.files)) {
+      const im = new Image();
+      im.decoding = 'async';
+      im.onload = () => { this.ok[k] = true; this.loaded++; this.listeners.forEach(fn => { try { fn(k); } catch (e) { console.warn(e); } }); };
+      im.onerror = () => { this.failed[k] = true; console.warn('Bild fehlt: assets/' + f + ' → gezeichnete Grafik'); };
+      im.src = 'assets/' + f;
+      this.img[k] = im;
+    }
+  },
+  has(k) { return CONFIG.assets.enabled && !!this.ok[k]; },
+  get(k) { return this.has(k) ? this.img[k] : null; },
+  onLoad(fn) { this.listeners.push(fn); },
+  /* hochwertig verkleinern (schrittweise halbieren) → keine Treppchen/kein Flimmern bei kleinen Dinos */
+  scaled(img, w, h) {
+    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h));
+    let src = img, sw = img.naturalWidth || img.width, sh = img.naturalHeight || img.height;
+    while (sw / 2 > c.width * 1.05 && sh / 2 > c.height * 1.05) {
+      const t = document.createElement('canvas'); t.width = Math.round(sw / 2); t.height = Math.round(sh / 2);
+      const g = t.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(src, 0, 0, t.width, t.height);
+      src = t; sw = t.width; sh = t.height;
+    }
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  },
+};
 
 /* ==========================================================================
    3. Store – localStorage mit try/catch (privater Modus, volle Quote, file:// …)
@@ -661,10 +703,10 @@ const FX = new Particles(CONFIG.perf.maxParticles);
    7. Art – alle Grafiken prozedural (flach, bunt, niedlich, mit Kontur)
    ========================================================================== */
 const RARITIES = {
-  common:    { key: 'common',    label: 'GEWÖHNLICH', color: '#7bd35b', dark: '#2f7a22', glow: null,      stars: 1 },
-  rare:      { key: 'rare',      label: 'SELTEN',     color: '#46a7ff', dark: '#1d5cb8', glow: null,      stars: 2 },
-  epic:      { key: 'epic',      label: 'EPISCH',     color: '#b86bff', dark: '#6526c4', glow: '#d9a0ff', stars: 3 },
-  legendary: { key: 'legendary', label: 'LEGENDÄR',   color: '#ffc83d', dark: '#b86e00', glow: '#ffe27a', stars: 4 },
+  common:    { key: 'common',    label: 'GEWÖHNLICH', color: '#7bd35b', dark: '#2f7a22', glow: null,      aura: null,      stars: 1 },
+  rare:      { key: 'rare',      label: 'SELTEN',     color: '#46a7ff', dark: '#1d5cb8', glow: null,      aura: '#3d8bff', stars: 2 },
+  epic:      { key: 'epic',      label: 'EPISCH',     color: '#b86bff', dark: '#6526c4', glow: '#d9a0ff', aura: '#b45cff', stars: 3 },
+  legendary: { key: 'legendary', label: 'LEGENDÄR',   color: '#ffc83d', dark: '#b86e00', glow: '#ffe27a', aura: '#ffc23a', stars: 4 },
 };
 const RARITY_ORDER = ['common', 'rare', 'epic', 'legendary'];
 
@@ -1063,11 +1105,11 @@ const Art = {
 /* ==========================================================================
    Eier: Form, Textur (vorgerendert), Risse
    ========================================================================== */
+/* 6 Eier = 6 Bilder (assets/egg_1…6); base/pat = Farben für Splitter & Ersatzgrafik */
 const EGG_PALETTES = [
-  { base: '#fff3c9', pat: '#ff9d5c' }, { base: '#c9f2ff', pat: '#3fa8ff' }, { base: '#ffd6ec', pat: '#ff5fae' },
-  { base: '#d9ffcf', pat: '#4fbf3a' }, { base: '#e8dcff', pat: '#9b6bff' }, { base: '#fff0a8', pat: '#ff6b6b' },
-  { base: '#ffe0c2', pat: '#a0643c' }, { base: '#c8fff0', pat: '#ff8a3d' }, { base: '#ffe1e1', pat: '#e0484f' },
-  { base: '#e3f6ff', pat: '#7d5cff' },
+  { base: '#f3ead8', pat: '#8a5a3a', img: 'egg_1' }, { base: '#53c29b', pat: '#2f8a62', img: 'egg_2' },
+  { base: '#47a3e3', pat: '#ffffff', img: 'egg_3' }, { base: '#f2615c', pat: '#7d3f9c', img: 'egg_4' },
+  { base: '#f1c24a', pat: '#e0782a', img: 'egg_5' }, { base: '#b48ae2', pat: '#f6edff', img: 'egg_6' },
 ];
 const EGG_PATTERNS = ['spots', 'zigzag', 'dots', 'bands', 'hearts', 'stars', 'speckles'];
 
@@ -1089,7 +1131,14 @@ const EggArt = {
   texture(spec) {
     const pad = 14, W = Math.ceil(spec.rx * 2 + pad * 2), H = Math.ceil(spec.ry * 2 + pad * 2);
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-    const g = cv.getContext('2d'); g.translate(W / 2, H / 2);
+    const g = cv.getContext('2d');
+    const im = Assets.get(spec.boss ? 'egg_boss' : spec.img);
+    if (im) {                                     // Bild-Ei: auf Höhe 2·ry eingepasst, mittig
+      const ih = spec.ry * 2, iw = Math.min(W - 4, ih * im.naturalWidth / im.naturalHeight);
+      g.drawImage(Assets.scaled(im, iw, ih), (W - iw) / 2, (H - ih) / 2);
+      cv.isImg = true; return cv;
+    }
+    g.translate(W / 2, H / 2);
     const path = this.path(spec.rx, spec.ry);
     g.save(); g.clip(path);
     g.fillStyle = spec.base; g.fillRect(-W / 2, -H / 2, W, H);
@@ -1178,24 +1227,71 @@ const EggArt = {
       else { const k = remain / d; ctx.lineTo(P[i - 1][0] + dx * k, P[i - 1][1] + dy * k); remain = 0; }
     }
   },
+  /* Lava-Risse: dunkle Kante + glühender Kern, dazu ein additiver Schein, der pulsiert.
+     Beide Ebenen werden an der Ei-Form (Alpha der Textur) ausgeschnitten und nur neu
+     gerendert, wenn sich etwas ändert (Stufe, Wachstum, Fortschritt). */
   drawCracks(ctx, egg, progress, tNow) {
-    const path = this.path(egg.rx, egg.ry);
-    ctx.save(); ctx.clip(path);
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const L = this.crackLayers(egg, progress, tNow);
+    if (!L) return;
+    const W = L.lines.width, H = L.lines.height;
+    const pulse = 0.8 + Math.sin(tNow * 5.5 + egg.phase) * 0.2;
+    ctx.drawImage(L.lines, -W / 2, -H / 2);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha *= clamp(0.55 + progress * 0.45, 0, 1) * pulse;
+    ctx.drawImage(L.glow, -W / 2, -H / 2); ctx.restore();
+  },
+  crackLayers(egg, progress, tNow) {
+    let key = '', any = false;
+    const segs = [];
     for (let s = 0; s < 4; s++) {
       const th = (s + 1) * 0.2;
       if (progress < th) break;
+      any = true;
       const grow = clamp(0.6 + (progress - th) / 0.2 * 0.4, 0.6, 1);
       const age = tNow - (egg.stageAt[s] || -9);
-      for (const line of egg.cracks[s]) {
-        const frac = age < 0.25 ? grow * easeOutCubic(age / 0.25) : grow;
-        ctx.beginPath(); this._partial(ctx, line, frac);
-        ctx.strokeStyle = OUTLINE; ctx.lineWidth = egg.boss ? 10 : 8; ctx.stroke();
-        ctx.strokeStyle = age < 0.35 ? '#ffffff' : 'rgba(255,255,255,0.55)'; ctx.lineWidth = age < 0.35 ? 5 : 2.5;
-        ctx.save(); ctx.translate(2, 2); ctx.beginPath(); this._partial(ctx, line, frac); ctx.stroke(); ctx.restore();
-      }
+      const frac = age < 0.25 ? grow * easeOutCubic(clamp(age, 0, 0.25) / 0.25) : grow;
+      const fresh = age < 0.35;
+      segs.push({ s, frac, fresh });
+      key += s + ':' + Math.round(frac * 60) + (fresh ? 'f' : '') + '|';
     }
-    ctx.restore();
+    if (!any) return null;
+    const tex = egg.tex, W = tex.width, H = tex.height;
+    key += Math.round(progress * 40) + '|' + W + 'x' + H + (tex.isImg ? 'i' : 'p');
+    if (egg._crK === key && egg._crL) return egg._crL;
+    egg._crK = key;
+    let L = egg._crL;
+    if (!L || L.lines.width !== W || L.lines.height !== H) {
+      const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+      L = egg._crL = { lines: mk(), glow: mk() };
+    }
+    const g = L.lines.getContext('2d'), gg = L.glow.getContext('2d');
+    for (const c of [g, gg]) { c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, W, H); c.translate(W / 2, H / 2); c.lineJoin = 'round'; c.lineCap = 'round'; }
+    const k = egg.boss ? 1.2 : egg.rx < 130 ? 0.85 : 1;
+    // inneres Glühen: je weiter das Ei, desto stärker leuchtet es von innen
+    const rg = gg.createRadialGradient(0, egg.ry * 0.15, egg.rx * 0.1, 0, egg.ry * 0.1, egg.ry * 1.05);
+    rg.addColorStop(0, `rgba(255,140,40,${0.05 + progress * 0.22})`); rg.addColorStop(1, 'rgba(255,90,20,0)');
+    gg.fillStyle = rg; gg.fillRect(-W / 2, -H / 2, W, H);
+    gg.shadowColor = 'rgba(255,120,20,1)'; gg.shadowBlur = 26 * k;
+    for (const { s, frac, fresh } of segs) for (const line of egg.cracks[s]) {
+      gg.beginPath(); this._partial(gg, line, frac);
+      gg.strokeStyle = 'rgba(255,120,30,1)'; gg.lineWidth = 18 * k; gg.stroke();
+      gg.strokeStyle = 'rgba(255,170,60,1)'; gg.lineWidth = 9 * k; gg.stroke();
+      gg.strokeStyle = fresh ? '#ffffff' : '#ffe9a6'; gg.lineWidth = 4 * k; gg.stroke();
+      g.beginPath(); this._partial(g, line, frac);
+      g.strokeStyle = 'rgba(48,14,4,0.9)'; g.lineWidth = 8 * k; g.stroke();
+      g.strokeStyle = '#ff8a1c'; g.lineWidth = 5 * k; g.stroke();
+      g.strokeStyle = fresh ? '#ffffff' : '#fff0b0'; g.lineWidth = (fresh ? 3.4 : 2.4) * k; g.stroke();
+    }
+    gg.shadowBlur = 0;
+    for (const c of [g, gg]) { c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'destination-in'; c.drawImage(tex, 0, 0); c.globalCompositeOperation = 'source-over'; }
+    return L;
+  },
+  /* einfarbige Silhouette einer Ei-Textur (Treffer-Blitz, Boss-Schatten) */
+  tint(tex, color) {
+    tex._tints = tex._tints || {};
+    if (tex._tints[color]) return tex._tints[color];
+    const c = document.createElement('canvas'); c.width = tex.width; c.height = tex.height;
+    const g = c.getContext('2d'); g.drawImage(tex, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = color; g.fillRect(0, 0, c.width, c.height);
+    return (tex._tints[color] = c);
   },
   /* Zickzack-Linie zum Aufbrechen (obere Kappe / untere Schale) */
   zigzag(rx, y0) {
@@ -1215,6 +1311,78 @@ const EggArt = {
    gezeichnet (statt jedes Frame ~20 Formen mit Kontur) → flüssige 60 fps auch
    mit 15 Herdentieren + 30 Helfern, selbst ohne Grafikbeschleunigung.
    -------------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+   Dino-Bilder (assets/dino_*.webp): Seltenheit = Farbvariante.
+   gewöhnlich = Original, selten/episch = umgefärbt, legendär = golden glänzend.
+   Umgefärbt wird per Mischmodus "color" (keine Pixel-Lesezugriffe → klappt auch per Doppelklick).
+   -------------------------------------------------------------------------- */
+const DINO_HUE = { trex: 105, triceratops: 205, stegosaurus: 26, brachiosaurus: 178, velociraptor: 36, ankylosaurus: 48, parasaurolophus: 272, spinosaurus: 4, pteranodon: 8, dilophosaurus: 68 };
+const RARITY_TINTS = { rare: ['#2f86ff', '#18c2c9', '#5560ff', '#2fc47c'], epic: ['#9d4dff', '#ff3fa8', '#c44dff'], legendary: ['#ffbf1f', '#ffd24a'] };
+const DinoArt = {
+  cache: new Map(),
+  has(sp) { return Assets.has('dino_' + sp); },
+  hueOf(hex) {
+    const [r, g, b] = hexToRgb(hex).map(v => v / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (!d) return 0;
+    const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  },
+  /* Zielfarbe: nicht zu nah an der Originalfarbe der Art (sonst sähe "selten" aus wie "gewöhnlich") */
+  tintFor(sp, rarity, palIdx = 0) {
+    const list = RARITY_TINTS[rarity]; if (!list) return null;
+    if (rarity === 'legendary') return list[palIdx % list.length];
+    const base = DINO_HUE[sp] || 0;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[(palIdx + i) % list.length], d = Math.abs(((this.hueOf(c) - base) % 360 + 540) % 360 - 180);
+      if (d >= 38) return c;
+    }
+    return list[palIdx % list.length];
+  },
+  /* Größe so normiert, dass alle Arten gleich "viel Dino" sind: size ≈ √(Breite·Höhe) */
+  dims(sp, size) { const im = Assets.img['dino_' + sp], w = im.naturalWidth, h = im.naturalHeight, s = size / Math.sqrt(w * h); return [w * s, h * s]; },
+  height(sp, size) { return this.has(sp) ? this.dims(sp, size)[1] : (SPECIES_H[sp] || 230) * size / 300; },
+  _q(size) { return Math.max(18, Math.round(size / 6) * 6); },
+  sprite(sp, rarity, palIdx, size) {
+    const q = this._q(size), tint = this.tintFor(sp, rarity, palIdx || 0), key = sp + '|' + q + '|' + (tint || '-');
+    let c = this.cache.get(key); if (c) return c;
+    const im = Assets.img['dino_' + sp], [w, h] = this.dims(sp, q);
+    const base = Assets.scaled(im, w, h);
+    if (tint) {
+      c = SpriteCache.canvas(base.width, base.height); const g = c.getContext('2d');
+      g.drawImage(base, 0, 0);
+      g.globalCompositeOperation = 'color'; g.globalAlpha = rarity === 'legendary' ? 0.95 : 0.84; g.fillStyle = tint; g.fillRect(0, 0, c.width, c.height);
+      if (rarity === 'legendary') {                     // Gold: tiefer Ton + Kontrast + diagonales Glanzlicht
+        g.globalCompositeOperation = 'multiply'; g.globalAlpha = 0.55; g.fillStyle = '#e0a020'; g.fillRect(0, 0, c.width, c.height);
+        g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.65;
+        const gr = g.createLinearGradient(0, 0, c.width, c.height * 0.8);
+        gr.addColorStop(0, '#fff6d8'); gr.addColorStop(0.35, '#ffd257'); gr.addColorStop(0.5, '#fffbe8'); gr.addColorStop(0.62, '#c98a10'); gr.addColorStop(1, '#ffe38a');
+        g.fillStyle = gr; g.fillRect(0, 0, c.width, c.height);
+      }
+      g.globalAlpha = 1; g.globalCompositeOperation = 'destination-in'; g.drawImage(base, 0, 0); g.globalCompositeOperation = 'source-over';
+    } else c = base;
+    if (this.cache.size > 300) this.cache.delete(this.cache.keys().next().value);
+    this.cache.set(key, c); return c;
+  },
+  /* Füße bei (x, y); o: size, rarity, palIdx, face (1 = schaut nach rechts), rot, sx, sy, alpha → gibt die Höhe zurück */
+  draw(ctx, sp, x, y, o = {}) {
+    const size = o.size || 120, c = this.sprite(sp, o.rarity || 'common', o.palIdx || 0, size), k = size / this._q(size);
+    const w = c.width * k, h = c.height * k;
+    ctx.save(); ctx.translate(x, y); if (o.rot) ctx.rotate(o.rot); ctx.scale((o.face || 1) * (o.sx || 1), o.sy || 1);
+    if (o.alpha != null) ctx.globalAlpha *= o.alpha;
+    ctx.drawImage(c, -w / 2, -h, w, h);
+    ctx.restore();
+    return h;
+  },
+  /* Spielzeug-Animation für statische Bilder: wippen beim Laufen, atmen im Stand, Flügelschlag (Pteranodon) */
+  pose(sp, t, walk, size) {
+    let bob = 0, rot = 0, sx = 1, sy = 1;
+    if (walk > 0.05) { const ph = t * 9; bob = Math.abs(Math.sin(ph)) * size * 0.07 * walk; rot = Math.sin(ph) * 0.075 * walk; sy = 1 + Math.abs(Math.cos(ph)) * 0.03 * walk; }
+    else { const br = Math.sin(t * 2.3) * 0.022; sy = 1 + br; sx = 1 - br * 0.5; }
+    if (sp === 'pteranodon') { bob += size * 0.38 + Math.sin(t * 2.4) * size * 0.06; sy *= 1 - (0.5 + 0.5 * Math.sin(t * 8)) * 0.2; rot *= 0.4; }
+    return { bob, rot, sx, sy };
+  },
+};
+
 const SpriteCache = {
   map: new Map(),
   get(key, make) { let s = this.map.get(key); if (!s) { s = make(); this.map.set(key, s); } return s; },
@@ -1244,7 +1412,8 @@ function helperFrame(hue, kind, i) {
 
 /* tatsächliche Höhe je Art in Dino-Einheiten (gemessen; für Karte & Namensschilder der Herde) */
 const SPECIES_H = { trex: 256, triceratops: 226, stegosaurus: 223, brachiosaurus: 357, velociraptor: 193, ankylosaurus: 140, parasaurolophus: 278, spinosaurus: 230, pteranodon: 241, dilophosaurus: 236 };
-const HERD_BAND = { y0: 1170 + LAND_DY, y1: 1480 + LAND_DY * 0.8, x0: 70, x1: 1010 };
+/* Herde: auf dem Höhlenboden vor den Lavabecken (reine Deko im Chat-Bereich) */
+const HERD_BAND = { y0: 1490, y1: 1650, x0: 90, x1: 990 };
 
 const SKY_KEYS = [   // [Phase, oben, unten, Nacht-Faktor]
   [0.00, '#5b62c4', '#ffb08a', 0.35],
@@ -1285,6 +1454,7 @@ class HerdDino {
     this.t += dt;
     this.blinkT -= dt; if (this.blinkT < 0) { this.blink = 0.14; this.blinkT = rand(2.5, 6); } if (this.blink > 0) this.blink -= dt;
     if (this.jumpIn >= 0) { this.jumpIn -= dt; if (this.jumpIn < 0 && this.hop <= 0) this.vh = rand(300, 420); }
+    if (this.joining && this.hop <= 0 && this.vh <= 0) this.vh = rand(260, 340);     // hüpft von der Felskante herunter
     if (this.hop > 0 || this.vh > 0) { this.vh -= 1500 * dt; this.hop = Math.max(0, this.hop + this.vh * dt); if (this.hop <= 0) this.vh = 0; }
     if (this.state === 'stumble') {
       this.timer -= dt; const k = 2.6 - this.timer;
@@ -1314,12 +1484,13 @@ class HerdDino {
   }
   draw(ctx) {
     const s = this.baseScale * this.scaleMul;
-    ctx.fillStyle = 'rgba(30,50,20,0.22)';
+    ctx.fillStyle = World.cave() ? 'rgba(0,0,0,0.38)' : 'rgba(30,50,20,0.22)';
     ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, 120 * s * (1 - Math.min(this.hop, 80) / 200), 18 * s, 0, 0, TAU); ctx.fill();
     if (this.hop > 0) { ctx.save(); ctx.translate(0, -this.hop * s * 2); this._drawBody(ctx, s); ctx.restore(); return; }
     this._drawBody(ctx, s);
   }
   _drawBody(ctx, s) {
+    if (DinoArt.has(this.species)) return this._drawImg(ctx, s);
     const R = RARITIES[this.rarity];
     if (R && R.glow) { const g = softBlob(R.glow); const gs = 200 * s * (1 + Math.sin(this.t * 3) * 0.08); ctx.globalAlpha = 0.55; ctx.drawImage(g, this.x - gs, this.y - SPECIES_H[this.species] * s * 0.55 - gs, gs * 2, gs * 2); ctx.globalAlpha = 1; }
     if (this.joining) {
@@ -1340,16 +1511,53 @@ class HerdDino {
     }
     if (this.name && !this.joining) drawText(ctx, this.name, this.x, this.y - SPECIES_H[this.species] * s - 18, { size: 28, strokeWidth: 6, color: R ? (this.rarity === 'common' ? '#ffffff' : R.color) : '#fff', drop: false, alpha: 0.92 });
   }
+  /* Bild-Dino: Spielzeug-Animation, Seltenheits-Schein, Namensschild als dunkle Pille */
+  _drawImg(ctx, s) {
+    const R = RARITIES[this.rarity], size = s * 250;
+    const p = DinoArt.pose(this.species, this.t, this.state === 'stumble' ? 0 : this.walk, size);
+    const h = DinoArt.height(this.species, size);
+    if (R && R.aura) {
+      const gs = size * 0.95 * (1 + Math.sin(this.t * 3) * 0.08);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = R.key === 'rare' ? 0.35 : 0.5;
+      ctx.drawImage(softBlob(R.aura), this.x - gs, this.y - p.bob - h * 0.5 - gs, gs * 2, gs * 2); ctx.restore();
+    }
+    DinoArt.draw(ctx, this.species, this.x, this.y - p.bob, { size, rarity: this.rarity, palIdx: this.palIdx, face: this.face, rot: p.rot * this.face + this.rot * this.face, sx: p.sx, sy: p.sy });
+    if (R && R.aura && Math.random() < 0.05) FX.spawn({ type: 'star', layer: 1, x: this.x + rand(-size * 0.4, size * 0.4), y: this.y - p.bob - rand(0, h), vx: rand(-20, 20), vy: rand(-50, -20), size: rand(5, 9), rot: 0, vr: rand(-3, 3), life: 0.9, color: R.aura });
+    if (this.state === 'stumble') {
+      const hy = this.y - h * 0.8 - 20;
+      for (let i = 0; i < 3; i++) { const a = this.t * 5 + i * TAU / 3; Art.starPath(ctx, this.x + Math.cos(a) * 34, hy + Math.sin(a) * 10, 9); ctx.fillStyle = '#ffe14d'; ctx.fill(); }
+    }
+    if (this.name && !this.joining) Glass.tag(ctx, this.name, this.x, this.y - p.bob - h - 22, { size: 24, color: this.rarity === 'common' ? '#f4ede4' : R.color, alpha: 0.95, maxW: 260 });
+  }
   toJSON() { return { species: this.species, rarity: this.rarity, palIdx: this.palIdx, name: this.name, seed: this.seed, born: this.born, id: this.id }; }
 }
+
+/* Höhle: Stellen im Hintergrundbild, die animiert glühen (Koordinaten im 1080×1920-Bild) */
+const CAVE_LAVA = [
+  { x: 40, y: 905, r: 150, a: 0.42, f: 1.7, p: 0 }, { x: 1060, y: 900, r: 135, a: 0.38, f: 1.4, p: 2 },
+  { x: 25, y: 1410, r: 120, a: 0.4, f: 2.1, p: 1 }, { x: 1062, y: 1430, r: 120, a: 0.4, f: 1.9, p: 3 },
+  { x: 85, y: 1512, r: 210, a: 0.5, f: 1.2, p: 4 }, { x: 960, y: 1516, r: 220, a: 0.5, f: 1.1, p: 5 },
+];
+const CAVE_CRYSTALS = [
+  { x: 90, y: 500, r: 110, c: '#b45cff' }, { x: 270, y: 390, r: 70, c: '#c77dff' }, { x: 370, y: 650, r: 70, c: '#c77dff' },
+  { x: 420, y: 770, r: 60, c: '#c77dff' }, { x: 70, y: 910, r: 140, c: '#b45cff' }, { x: 880, y: 260, r: 70, c: '#c77dff' },
+  { x: 1030, y: 300, r: 90, c: '#b45cff' }, { x: 840, y: 630, r: 80, c: '#ff3b4f' }, { x: 990, y: 770, r: 80, c: '#c77dff' },
+  { x: 1010, y: 930, r: 110, c: '#b45cff' }, { x: 940, y: 1390, r: 110, c: '#9a5cff' },
+  { x: 330, y: 760, r: 120, c: '#ff3346' }, { x: 800, y: 760, r: 130, c: '#ff3346' }, { x: 620, y: 880, r: 120, c: '#ff3346' },
+].map((c, i) => Object.assign({ a: c.c === '#ff3346' ? 0.22 : 0.4, f: 0.9 + (i % 4) * 0.35, p: i * 1.3 }, c));
 
 const World = {
   t: 0, dayPhase: 0.12, night: 0,
   clouds: [], stars: [], flyers: [], butterflies: [], fireflies: [], drops: [], herd: [], shooting: [], grass: [], ferns: [],
   rain: 0, rainTarget: 0, rainEnd: 0, rainbow: 0, rainbowEnd: 0, eruption: 0, nextEventAt: 0, nextFlyerAt: 8, nextEruptAt: 200,
   lastEvent: '',
+  embers: [], motes: [], cdrops: [], bossK: 0, lavaBoost: 0, quakeT: 0, dripUntil: 0, _emT: 0,
+
+  /* Höhlen-Look aktiv, sobald das Höhlenbild geladen ist */
+  cave() { return Assets.has('bg'); },
 
   init() {
+    for (let i = 0; i < 34; i++) this.motes.push({ x: rand(300, 900), y: rand(260, 980), vx: rand(-6, 6), vy: rand(-14, -4), p: rand(0, TAU), s: rand(1.2, 2.8) });
     this.renderLayers();
     const r = mulberry32(42);
     for (let i = 0; i < 150; i++) this.stars.push({ x: r() * 1080, y: r() * (820 + LAND_DY), s: 1 + r() * 2.6, p: r() * TAU, sp: 0.8 + r() * 2.5 });
@@ -1462,15 +1670,17 @@ const World = {
     this.dayPhase = (this.dayPhase + dt / CONFIG.dayNight.cycleSec) % 1;
     this.night = this.skyAt(this.dayPhase).night;          // auch ohne Zeichnen aktuell (z. B. für Glühwürmchen)
     for (const c of this.clouds) { c.x += c.sp * dt * (1 + this.rain * 2); if (c.x > 1180) { Object.assign(c, this.makeCloud(-c.w - rand(0, 200))); } }
+    const cave = this.cave();
+    if (cave) this.updateCave(dt);
     // Vulkanrauch (immer) + gelegentliche Eruption
     this._smokeT = (this._smokeT || 0) - dt;
-    if (this._smokeT <= 0) {
+    if (this._smokeT <= 0 && !cave) {
       this._smokeT = this.eruption > 0 ? 0.08 : 0.45;
       FX.spawn({ type: 'blob', layer: 0, x: 835 + rand(-12, 12), y: 790 + LAND_DY, vx: rand(4, 16), vy: rand(-38, -24) * (this.eruption > 0 ? 2 : 1), size: rand(16, 26), grow: 9, life: rand(5, 7), alpha: this.eruption > 0 ? 0.75 : 0.5, color: this.eruption > 0 ? '#7b6f88' : '#c9c1d6', fadeIn: 0.6 });
     }
     if (this.eruption > 0) {
       this.eruption -= dt;
-      if (Math.random() < dt * 22) FX.spawn({ type: 'spark', layer: 0, x: 835 + rand(-15, 15), y: 795 + LAND_DY, vx: rand(-120, 120), vy: rand(-380, -220), g: 420, size: rand(5, 9), life: rand(1.2, 1.8), color: pick(['#ff7a2f', '#ffb13d', '#ff4d2e']) });
+      if (!cave && Math.random() < dt * 22) FX.spawn({ type: 'spark', layer: 0, x: 835 + rand(-15, 15), y: 795 + LAND_DY, vx: rand(-120, 120), vy: rand(-380, -220), g: 420, size: rand(5, 9), life: rand(1.2, 1.8), color: pick(['#ff7a2f', '#ffb13d', '#ff4d2e']) });
     }
     if (this.t > this.nextEruptAt) { this.nextEruptAt = this.t + rand(150, 260); this.erupt(); }
     // Flugsaurier im Hintergrund
@@ -1510,16 +1720,65 @@ const World = {
     if (this.t > this.nextEventAt) { this.nextEventAt = this.t + rand(CONFIG.miniEvents.minSec, CONFIG.miniEvents.maxSec); this.randomEvent(); }
   },
 
+  /* --- Höhle: Glut, Staub, Tropfen, Beben, Boss-Überblendung --- */
+  updateCave(dt) {
+    const boss = Game.mode === 'boss' && Game.phase !== 'impact';
+    this.bossK = clamp(this.bossK + (boss ? dt : -dt) / 1.6, 0, 1);
+    this.lavaBoost = Math.max(0, this.lavaBoost - dt);
+    this._emT += dt * (8 + (this.lavaBoost > 0 ? 45 : 0) + (Hype.active > 0 ? 10 : 0));
+    while (this._emT >= 1) { this._emT -= 1; if (this.embers.length < 130) this.embers.push(this.makeEmber()); }
+    for (const e of this.embers) { e.t += dt; e.x += (e.vx + Math.sin(e.t * e.f + e.p) * 16) * dt; e.y += e.vy * dt; }
+    if (this.embers.length && this.embers[0].t > this.embers[0].life) this.embers = this.embers.filter(e => e.t < e.life);
+    for (const m of this.motes) {
+      m.x += (m.vx + Math.sin(this.t * 0.3 + m.p) * 5) * dt; m.y += m.vy * dt;
+      if (m.y < 250) { m.y = 990; m.x = rand(300, 900); }
+    }
+    if (this.dripUntil > this.t && Math.random() < dt * 4) this.cdrops.push({ x: rand(150, 930), y: rand(140, 300), vy: rand(0, 60), floor: rand(1030, 1110) });
+    for (const d of this.cdrops) {
+      d.vy += 1500 * dt; d.y += d.vy * dt;
+      if (d.y >= d.floor) {
+        d.dead = true;
+        FX.spawn({ type: 'ring', layer: 1, x: d.x, y: d.floor, size: 4, grow: 46, life: 0.4, color: 'rgba(190,225,255,0.85)', squash: 0.32 });
+        for (let i = 0; i < 3; i++) FX.spawn({ type: 'spark', layer: 1, x: d.x, y: d.floor - 2, vx: rand(-90, 90), vy: rand(-220, -120), g: 900, size: rand(2, 4), life: 0.45, color: '#cfe8ff' });
+      }
+    }
+    if (this.cdrops.length) this.cdrops = this.cdrops.filter(d => !d.dead);
+    if (this.quakeT > 0) {
+      this.quakeT -= dt;
+      Game.shake = Math.max(Game.shake, 0.32 * clamp(this.quakeT, 0, 1));
+      if (Math.random() < dt * 14) FX.spawn({ type: 'rock', layer: 1, x: rand(120, 960), y: rand(120, 260), vx: rand(-40, 40), vy: rand(0, 80), g: 1400, size: rand(5, 11), rot: rand(0, TAU), vr: rand(-6, 6), life: 1.6, color: '#5b4a46', floor: rand(1030, 1110) });
+      if (Math.random() < dt * 8) FX.spawn({ type: 'blob', layer: 1, x: rand(120, 960), y: rand(150, 300), vx: rand(-10, 10), vy: rand(20, 60), size: rand(18, 30), grow: 20, life: 2.4, color: '#7a6a62', alpha: 0.35 });
+    }
+  },
+  makeEmber() {
+    const boss = this.bossK > 0.5, r = Math.random(), left = Math.random() < 0.5;
+    let x, y;
+    if (!boss && r < 0.62) { x = left ? rand(0, 190) : rand(850, 1080); y = rand(1470, 1540); }        // Lavabecken
+    else if (!boss && r < 0.8) { x = left ? rand(10, 90) : rand(1000, 1075); y = rand(820, 1010); }   // Lava an den Wänden
+    else { x = rand(80, 1000); y = rand(1120, 1680); }
+    const col = boss ? (Math.random() < 0.7 ? '#c77dff' : '#ff4d5e') : (Math.random() < 0.72 ? '#ff8a2a' : '#ffc94a');
+    return { x, y, vx: rand(-14, 14), vy: rand(-115, -45), t: 0, life: rand(3.2, 6.5), f: rand(1, 2.6), p: rand(0, TAU), s: rand(0.55, 1.25), c: col };
+  },
+
   /* --- Mini-Ereignisse --- */
   randomEvent(forced) {
-    const opts = ['rain', 'shooting', 'stumble', 'butterflies', 'eruption', 'flyby', 'parade', 'fireflies'].filter(o => o !== this.lastEvent && (o !== 'parade' || this.herd.length >= 3));
-    const ev = forced || pick(opts);
+    const cave = this.cave();
+    const all = cave ? ['drips', 'quake', 'stumble', 'butterflies', 'eruption', 'flyby', 'parade', 'fireflies'] : ['rain', 'shooting', 'stumble', 'butterflies', 'eruption', 'flyby', 'parade', 'fireflies'];
+    const opts = all.filter(o => o !== this.lastEvent && (o !== 'parade' || this.herd.length >= 3));
+    let ev = forced || pick(opts);
+    ev = cave ? ({ rain: 'drips', shooting: 'quake' }[ev] || ev) : ({ drips: 'rain', quake: 'shooting' }[ev] || ev);
     this.lastEvent = ev;
     switch (ev) {
+      case 'drips': this.dripUntil = this.t + 16; break;
+      case 'quake':
+        this.quakeT = 2.6; Sound.rumble(2.2, 0.2);
+        for (const h of this.herd) h.jump(rand(0, 0.4));
+        for (const h of Game.helpers) if (h.hop <= 0) h.vh = rand(200, 320);
+        break;
       case 'rain': this.rainTarget = 1; this.rainEnd = this.t + 18; break;
       case 'shooting': for (let i = 0; i < 3; i++) this.shooting.push({ x: rand(-50, 400), y: rand(160, 420), vx: rand(700, 900), vy: rand(160, 260), t: -i * 0.6, life: 1.6 + i * 0.6 }); break;
       case 'stumble': { const c = this.herd.filter(h => h.state !== 'stumble' && !h.joining && !h.leaving && h.species !== 'pteranodon'); if (c.length) { const h = pick(c); if (h.stumble()) for (let i = 0; i < 10; i++) FX.spawn({ type: 'blob', layer: 1, x: h.x + rand(-40, 40), y: h.y - 5, vx: rand(-60, 60), vy: rand(-40, -10), size: rand(10, 18), grow: 20, life: 1, color: '#c9b08a', alpha: 0.7 }); } else this.randomEvent('butterflies'); break; }
-      case 'butterflies': for (let i = 0; i < 7; i++) this.butterflies.push({ x: rand(100, 900), y: rand(1300, 1700), vx: rand(-40, 40), vy: rand(-60, -20), t: rand(0, 5), life: rand(20, 28), c: pick(['#ff7fb0', '#ffe14d', '#8fd3ff', '#b98bff', '#ff9d5c']) }); break;
+      case 'butterflies': for (let i = 0; i < 7; i++) this.butterflies.push({ x: rand(100, 900), y: cave ? rand(900, 1250) : rand(1300, 1700), vx: rand(-40, 40), vy: rand(-60, -20), t: rand(0, 5), life: rand(20, 28), c: pick(['#ff7fb0', '#ffe14d', '#8fd3ff', '#b98bff', '#ff9d5c']) }); break;
       case 'eruption': this.erupt(); break;
       case 'flyby': this.spawnFlyer(rand(0, 1) < 0.5 ? 4 : 7); break;
       case 'parade': {                                       // Herden-Parade: alle rennen quer über die Wiese
@@ -1528,19 +1787,95 @@ const World = {
         break;
       }
       case 'fireflies':                                      // nachts Glühwürmchen, tagsüber Schmetterlinge
-        if (this.night < 0.4) return this.randomEvent('butterflies');
-        for (let i = 0; i < 24; i++) this.fireflies.push({ x: rand(60, 1020), y: rand(1150, 1750), vx: rand(-20, 20), vy: rand(-15, 15), t: rand(0, 6), life: rand(20, 28), p: rand(0, TAU) });
+        if (!cave && this.night < 0.4) return this.randomEvent('butterflies');
+        for (let i = 0; i < 26; i++) this.fireflies.push({ x: rand(60, 1020), y: cave ? rand(640, 1300) : rand(1150, 1750), vx: rand(-20, 20), vy: rand(-15, 15), t: rand(0, 6), life: rand(20, 28), p: rand(0, TAU) });
         break;
     }
     return ev;
   },
-  erupt() { this.eruption = 4.5; Sound.rumble(2.2, 0.16); },
+  erupt() {
+    this.eruption = 4.5; Sound.rumble(2.2, 0.16);
+    if (this.cave()) {                                     // Höhle: die Lava kocht hoch, Glut spritzt
+      this.lavaBoost = 5;
+      for (let i = 0; i < 26; i++) { const L = pick(CAVE_LAVA.slice(2)); FX.spawn({ type: 'spark', layer: 1, x: L.x + rand(-60, 60), y: L.y - 10, vx: rand(-160, 160), vy: rand(-520, -260), g: 700, size: rand(4, 8), life: rand(1, 1.6), color: pick(['#ff7a2f', '#ffb13d', '#ff4d2e']) }); }
+    }
+  },
   spawnFlyer(n) {
-    const dir = Math.random() < 0.5 ? 1 : -1, y = rand(380, 620);
+    const dir = Math.random() < 0.5 ? 1 : -1, y = this.cave() ? rand(620, 760) : rand(380, 620);
     for (let i = 0; i < n; i++) this.flyers.push({ x: dir > 0 ? -80 - i * 70 : 1160 + i * 70, y: y + (i % 2) * 40 + i * 12, vx: dir * rand(80, 110), p: rand(0, TAU), s: rand(0.7, 1.1) });
   },
 
-  /* --- Zeichnen --- */
+  /* --- Zeichnen: Höhle --- */
+  _shaft: null,
+  shaftSprite() {
+    if (this._shaft) return this._shaft;
+    const c = SpriteCache.canvas(220, 900), g = c.getContext('2d');
+    const gr = g.createLinearGradient(0, 0, 0, 900); gr.addColorStop(0, 'rgba(255,226,180,0.9)'); gr.addColorStop(0.55, 'rgba(255,200,150,0.35)'); gr.addColorStop(1, 'rgba(255,190,140,0)');
+    g.fillStyle = gr; g.beginPath(); g.moveTo(80, 0); g.lineTo(140, 0); g.lineTo(220, 900); g.lineTo(0, 900); g.closePath(); g.fill();
+    const side = g.createLinearGradient(0, 0, 220, 0); side.addColorStop(0, 'rgba(0,0,0,1)'); side.addColorStop(0.35, 'rgba(0,0,0,0)'); side.addColorStop(0.65, 'rgba(0,0,0,0)'); side.addColorStop(1, 'rgba(0,0,0,1)');
+    g.globalCompositeOperation = 'destination-out'; g.fillStyle = side; g.fillRect(0, 0, 220, 900);
+    return (this._shaft = c);
+  },
+  drawCave(ctx, t) {
+    const k = this.bossK, bgB = Assets.get('bgBoss');
+    if (k < 1 || !bgB) ctx.drawImage(Assets.img.bg, 0, 0);
+    if (k > 0 && bgB) { ctx.globalAlpha = k; ctx.drawImage(bgB, 0, 0); ctx.globalAlpha = 1; }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    // Lichtkegel aus der Öffnung in der Höhlendecke (wandern & atmen langsam)
+    const sh = this.shaftSprite();
+    [[560, -0.16, 0], [700, 0.05, 2.1], [830, 0.2, 4.2]].forEach(([bx, ang, p]) => {
+      const a = (0.06 + 0.04 * Math.sin(t * 0.35 + p)) * (1 - k); if (a < 0.005) return;
+      ctx.globalAlpha = a; ctx.save(); ctx.translate(bx + Math.sin(t * 0.12 + p) * 30, 220); ctx.rotate(ang + Math.sin(t * 0.1 + p) * 0.03); ctx.drawImage(sh, -110, 0); ctx.restore();
+    });
+    // Lava pulsiert (beim Ausbruch deutlich heller)
+    const boost = 1 + clamp(this.lavaBoost, 0, 1) * 1.3;
+    const lava = softBlob('#ff6a1a');
+    for (const L of CAVE_LAVA) {
+      const a = L.a * (0.72 + 0.28 * Math.sin(t * L.f + L.p)) * boost * (1 - k); if (a < 0.01) continue;
+      const r = L.r * (1 + 0.07 * Math.sin(t * L.f * 0.7 + L.p)); ctx.globalAlpha = Math.min(1, a);
+      ctx.drawImage(lava, L.x - r, L.y - r * 0.62, r * 2, r * 1.24);
+    }
+    // Boss-Höhle: Kristalle & rote Risse leuchten
+    if (k > 0.01) for (const C of CAVE_CRYSTALS) {
+      const a = C.a * (0.55 + 0.45 * Math.sin(t * C.f + C.p)) * k; ctx.globalAlpha = a;
+      ctx.drawImage(softBlob(C.c), C.x - C.r, C.y - C.r, C.r * 2, C.r * 2);
+    }
+    ctx.restore();
+  },
+  /* Flugsaurier ziehen als dunkle Silhouetten durch die Höhle (Flügelschlag = Stauchen) */
+  drawFlyers(ctx) {
+    if (!this.flyers.length) return;
+    if (!DinoArt.has('pteranodon')) { for (const f of this.flyers) this._flyer(ctx, f); return; }
+    if (!this._flySil) {
+      const src = DinoArt.sprite('pteranodon', 'common', 0, 110), c = SpriteCache.canvas(src.width, src.height), g = c.getContext('2d');
+      g.drawImage(src, 0, 0); g.globalCompositeOperation = 'source-atop'; g.fillStyle = 'rgba(28,16,14,0.82)'; g.fillRect(0, 0, c.width, c.height);
+      this._flySil = c;
+    }
+    const im = this._flySil;
+    for (const f of this.flyers) {
+      const flap = 0.72 + 0.28 * Math.sin(this.t * 7 + f.p);
+      ctx.save(); ctx.translate(f.x, f.y); ctx.scale((f.vx > 0 ? 1 : -1) * f.s * 0.8, f.s * 0.8 * flap);
+      ctx.drawImage(im, -im.width / 2, -im.height / 2); ctx.restore();
+    }
+  },
+  drawCaveFront(ctx) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const m of this.motes) { ctx.globalAlpha = (0.25 + 0.25 * Math.sin(this.t * 1.3 + m.p)) * (1 - this.bossK * 0.6); ctx.fillStyle = '#ffe9c8'; ctx.fillRect(m.x, m.y, m.s, m.s); }
+    for (const e of this.embers) {
+      const a = clamp(e.t / 0.4, 0, 1) * clamp((e.life - e.t) / 1.2, 0, 1) * (0.6 + 0.4 * Math.sin(e.t * 9 + e.p));
+      if (a <= 0.02) continue;
+      const s = 15 * e.s; ctx.globalAlpha = a * 0.7; ctx.drawImage(softBlob(e.c), e.x - s, e.y - s, s * 2, s * 2);
+      ctx.globalAlpha = a; ctx.fillStyle = '#fff1c2'; ctx.fillRect(e.x - 1.5 * e.s, e.y - 1.5 * e.s, 3 * e.s, 3 * e.s);
+    }
+    ctx.restore();
+    if (this.cdrops.length) {
+      ctx.strokeStyle = 'rgba(200,230,255,0.75)'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath();
+      for (const d of this.cdrops) { ctx.moveTo(d.x, d.y); ctx.lineTo(d.x, d.y - Math.min(30, d.vy * 0.03)); }
+      ctx.stroke();
+    }
+  },
+
+  /* --- Zeichnen: Wiese (Ersatz, falls die Bilder fehlen) --- */
   drawSky(ctx) {
     const sky = this.skyAt(this.dayPhase); this.night = sky.night;
     const grd = ctx.createLinearGradient(0, 0, 0, 1050 + LAND_DY);
@@ -1685,6 +2020,20 @@ const World = {
   /* Meteor: wächst & wird heller, je näher der Countdown an 0 ist */
   drawMeteor(ctx, m) {
     if (!m || m.alpha <= 0.01) return;
+    const im = Assets.get('meteor');
+    if (im) {                                              // Bild: Gesteinskern unten links, Feuerschweif oben rechts
+      const tx = m.tx != null ? m.tx : CONFIG.layout.eggX, flip = tx > m.x ? -1 : 1;   // fliegt nach rechts → spiegeln
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = m.alpha * (0.35 + m.heat * 0.65);
+      const gs = m.r * (2.6 + m.heat * 1.8 + Math.sin(this.t * 12) * 0.2 * m.heat);
+      ctx.drawImage(softBlob('#ff7a2f'), m.x - gs, m.y - gs, gs * 2, gs * 2);
+      ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = m.alpha;
+      const iw = m.r * 4.4, ih = iw * im.naturalHeight / im.naturalWidth;
+      ctx.translate(m.x, m.y); ctx.scale(flip, 1); ctx.rotate(Math.sin(this.t * 3) * 0.03);
+      ctx.drawImage(im, -iw * 0.3, -ih * 0.73, iw, ih);
+      ctx.restore();
+      return;
+    }
     ctx.save(); ctx.globalAlpha = m.alpha;
     const dirx = 1, diry = -0.75, len = m.r * (3 + m.heat * 4);
     for (let i = 8; i >= 1; i--) {
@@ -1882,8 +2231,9 @@ class Egg {
     this.palIdx = o.palIdx != null ? o.palIdx : randInt(0, EGG_PALETTES.length - 1);
     this.pattern = o.pattern || pick(EGG_PATTERNS);
     const pal = EGG_PALETTES[this.palIdx % EGG_PALETTES.length];
-    this.color = this.boss ? '#6a5aa8' : pal.base; this.color2 = this.boss ? '#8a78d0' : pal.pat;
-    this.tex = EggArt.texture({ rx: this.rx, ry: this.ry, base: this.color, pat: this.color2, pattern: this.pattern, seed: this.seed, boss: this.boss });
+    this.img = pal.img;
+    this.color = this.boss ? '#57536a' : pal.base; this.color2 = this.boss ? '#b46bff' : pal.pat;
+    this.retex();
     this.cracks = EggArt.genCracks(this.seed, this.rx, this.ry);
     this.stageAt = [-9, -9, -9, -9];
     this.stage = 0;
@@ -1897,6 +2247,12 @@ class Egg {
   }
   get progress() { return clamp(1 - this.hp / this.maxHp, 0, 1); }
   get cy() { return this.groundY - this.ry * 0.95; }
+  /* Textur (neu) bauen – z. B. wenn das Ei-Bild erst nach dem Start fertig geladen ist */
+  retex() {
+    this.tex = EggArt.texture({ rx: this.rx, ry: this.ry, base: this.color, pat: this.color2, pattern: this.pattern, seed: this.seed, boss: this.boss, img: this.img });
+    this._crK = null;
+  }
+  get wantsImg() { return !this.tex.isImg && Assets.has(this.boss ? 'egg_boss' : this.img); }
 }
 
 /* Helfer-Dino eines Zuschauers */
@@ -1904,10 +2260,12 @@ class Helper {
   constructor(u) {
     this.uid = u.id; this.name = u.name; this.hue = u.hue;
     this.fromLeft = Math.random() < 0.5;
-    this.x = this.fromLeft ? -60 : 1140; this.y = CONFIG.layout.groundY + 50; this.tx = this.x; this.ty = this.y; this.scale = 1;
+    this.x = this.fromLeft ? -60 : 1140; this.y = CONFIG.layout.groundY - 30; this.tx = this.x; this.ty = this.y; this.scale = 1;
     this.state = 'walk'; this.t = rand(0, 10); this.walk = 1; this.face = this.fromLeft ? 1 : -1;
     this.peckT = 0; this.hop = 0; this.vh = 0; this.cheerT = 0; this.lastAct = gnow(); this.tagUntil = now() + CONFIG.helpers.tagSec + 2;
     this.slot = null; this.dead = false; this.blinkT = rand(1, 5); this.blink = 0; this.joinedAt = gnow();
+    this.species = DINO_KEYS[hashStr(String(u.id)) % DINO_KEYS.length];   // jeder Zuschauer hat "seine" Art
+    this.dh = 100;                                                         // zuletzt gezeichnete Höhe (für Namensschild/Krone)
   }
   setSlot(s) { this.slot = s; this.tx = s.x; this.ty = s.y; this.scale = s.scale; if (this.state !== 'leave') this.state = 'walk'; }
   leave() { this.state = 'leave'; this.tx = this.x < 540 ? -120 : 1200; this.slot = null; }
@@ -1933,6 +2291,13 @@ class Helper {
   draw(ctx) {
     const k = this.peckT > 0 ? Math.sin((1 - this.peckT / 0.28) * Math.PI) : 0;
     const x = this.x + this.face * k * 12;
+    if (DinoArt.has(this.species)) {
+      const size = 114 * this.scale, p = DinoArt.pose(this.species, this.t, this.walk, size);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, size * 0.42 * (1 - Math.min(this.hop, 60) / 150), 8 * this.scale, 0, 0, TAU); ctx.fill();
+      this.dh = DinoArt.draw(ctx, this.species, x, this.y - this.hop - p.bob, { size, face: this.face, rot: (p.rot + k * 0.32) * this.face, sx: p.sx, sy: p.sy }) + p.bob;
+      if (Game.kings.has(this.uid) && this.state !== 'leave') Icon.draw(ctx, 'crown', x + this.face * 4, this.y - this.hop - this.dh - 14 + Math.sin(this.t * 4) * 3, 40);
+      return;
+    }
     ctx.fillStyle = 'rgba(30,50,20,0.25)'; ctx.beginPath(); ctx.ellipse(this.x, this.y + 2, 30 * this.scale, 7 * this.scale, 0, 0, TAU); ctx.fill();
     const kind = this.walk ? 'w' : this.blink > 0 ? 'b' : 'i';
     const i = this.walk ? Math.floor((((this.t * 12) / TAU) % 1) * 6) : kind === 'i' ? Math.floor((((this.t * 3) / TAU) % 1) * 4) : 0;
@@ -1950,16 +2315,17 @@ class Helper {
     }
   }
   /* Namensschild – wird separat gezeichnet (max. 6 gleichzeitig, versetzt, damit nichts überlappt) */
-  drawTag(ctx, lift) {
+  /* Platz, den das Schild bräuchte (wird vom HUD überlappungsfrei verteilt) */
+  tagBox(ctx) {
     const king = Game.kings.has(this.uid);
     const a = king ? 1 : clamp((this.tagUntil - now()) / 0.6, 0, 1);
-    const text = this.name, w = measureText(ctx, text, 30) + (king ? 40 : 0);
-    let y = this.y - 100 * this.scale - this.hop - lift - (king ? 22 : 0);
-    const board = Game.mode !== 'duel' && Game.phase !== 'reveal';          // Bestenliste links oben (x < 376, y < 1030)
-    if (board && this.x - w / 2 < 380 && y < 1040) y = this.y + 30 + lift * 0.6;     // dann Schild unter die Füße
-    const tx = clamp(this.x, 24 + w / 2, 872 - w / 2);
-    if (king) { ctx.globalAlpha = a; Icon.draw(ctx, 'crown', tx - w / 2 + 16, y - 2, 32); ctx.globalAlpha = 1; }
-    drawText(ctx, text, tx + (king ? 20 : 0), y, { size: 30, strokeWidth: 7, color: king ? '#ffd35c' : CREAM, alpha: a, drop: false });
+    const w = Math.min(330, measureText(ctx, this.name, 27) + 34 + (king ? 34 : 0)), h = 40;
+    const y = this.y - this.hop - (this.dh || 100 * this.scale) - (king ? 54 : 26);
+    return { h: this, king, a, w, hgt: h, x: clamp(this.x, 104 + w / 2, 936 - w / 2), y };
+  }
+  drawTag(ctx, box) {
+    if (box.a <= 0.01) return;
+    Glass.tag(ctx, this.name, box.x, box.y, { size: 27, alpha: box.a, icon: box.king ? 'crown' : null, color: box.king ? '#ffd35c' : '#f4ede4', border: box.king ? 'rgba(255,211,92,0.7)' : null, maxW: 330 });
   }
 }
 
@@ -1992,7 +2358,7 @@ const Game = {
     const R = CONFIG.rotation; const sp = []; if (R.bossEnabled) sp.push('boss'); if (R.duelEnabled) sp.push('duel');
     return this.normalsSince >= R.normalsBeforeSpecial && sp.length ? sp[this.specialIdx % sp.length] : 'normal';
   },
-  eggXs(mode) { const x = CONFIG.layout.eggX; return mode === 'duel' ? [290, 710] : mode === 'boss' ? [x + 45] : [x]; },
+  eggXs(mode) { const x = CONFIG.layout.eggX; return mode === 'duel' ? [290, 710] : mode === 'boss' ? [x - 25] : [x]; },
 
   startRound(mode) {
     this.mode = mode; this.eggNumber++; this.totals.eggs++;
@@ -2001,7 +2367,7 @@ const Game = {
     this.phase = 'intro'; this.phaseT = 0; this.introDur = dur;
     this.eggs = []; this.hatchInfo = null; this.impactInfo = null;
     this.announce = { mode, t: 0, dur };
-    this.meteor = { x: 860, y: 560, r: 8, heat: 0, alpha: 0, state: 'sky', t: 0 };
+    this.meteor = { x: 150, y: 660, r: 8, heat: 0, alpha: 0, state: 'sky', t: 0 };
     Sound.announce(mode); Sound.setUrgency(0);
     Hype.reset(); Missions.cancel(); Bubbles.cur = null; this.urgentSaid = false; this.kings = new Set();
     if (mode === 'duel') {
@@ -2125,24 +2491,25 @@ const Game = {
   },
   /* Plätze rund um das Ei/die Eier verteilen */
   helperSlots() {
-    const xs = this.eggXs(this.mode), gy = CONFIG.layout.groundY, rows = [[-4, 0.9], [30, 1], [64, 1.06], [98, 1.12]];
+    // 4 Reihen auf der Felskante (hinten kleiner, vorne größer)
+    const xs = this.eggXs(this.mode), gy = CONFIG.layout.groundY, rows = [[-86, 0.84], [-60, 0.92], [-34, 1], [-8, 1.08]];
     const make = (ex, rx, team, innerSide, innerMax) => {
       const out = [];
       rows.forEach(([dy, sc], r) => {
         for (const side of [-1, 1]) {
           const maxK = side === innerSide ? innerMax : 6;
           for (let k = 0; k < maxK; k++) {
-            const x = ex + side * (rx * 0.95 + 42 + k * 58 + (r % 2) * 22);
-            if (x < 46 || x > 925) continue;
+            const x = ex + side * (rx * 0.95 + 44 + k * 66 + (r % 2) * 26);
+            if (x < (this.mode === 'duel' ? 60 : 120) || x > 925) continue;   // links bleibt Platz für die Hype-Säule
             out.push({ x, y: gy + dy, scale: sc, team, d: Math.abs(x - ex) + r * 40 });
           }
         }
       });
       return out.sort((a, b) => a.d - b.d);
     };
-    if (this.mode === 'duel') { const rx = EGG_SIZES.duel[0]; return { 1: make(xs[0], rx, 1, 1, 1), 2: make(xs[1], rx, 2, -1, 1) }; }
+    if (this.mode === 'duel') { const rx = EGG_SIZES.duel[0]; return { 1: make(xs[0], rx, 1, 1, 2), 2: make(xs[1], rx, 2, -1, 2) }; }
     const rx = (EGG_SIZES[this.mode] || EGG_SIZES.normal)[0];
-    return { 0: make(xs[0], rx, 0, 0, 6).filter(s => s.y < gy + 80) };
+    return { 0: make(xs[0], rx, 0, 0, 6) };
   },
   layoutHelpers() {
     const slots = this.helperSlots();
@@ -2153,7 +2520,7 @@ const Game = {
       if (this.mode === 'duel') { const u = Users.map.get(h.uid); team = u && u.team ? u.team : 1; }
       const list = slots[team] || [];
       const s = list[used[team]++];
-      if (s) h.setSlot(s); else { h.setSlot({ x: h.fromLeft ? -50 : 1130, y: CONFIG.layout.groundY + 50, scale: 1 }); }
+      if (s) h.setSlot(s); else { h.setSlot({ x: h.fromLeft ? -50 : 1130, y: CONFIG.layout.groundY - 30, scale: 1 }); }
     }
   },
   /* Treffer auf ein Ei */
@@ -2520,9 +2887,9 @@ const Game = {
     m.t += dt;
     if (m.state === 'sky') {
       const q = this.phase === 'play' ? clamp(1 - this.timeLeft / this.duration, 0, 1) : 0;
-      m.r = lerp(9, 72, Math.pow(q, 1.5)); m.heat = Math.pow(q, 2);
+      m.r = lerp(9, 66, Math.pow(q, 1.5)); m.heat = Math.pow(q, 2);
       m.alpha = this.phase === 'play' ? Math.min(1, m.alpha + dt * 0.8) : Math.max(0, m.alpha - dt);
-      m.x = lerp(870, 805, q) + Math.sin(this.t * 0.7) * 4; m.y = lerp(545, 610, q);
+      m.x = lerp(150, 205, q) + Math.sin(this.t * 0.7) * 4; m.y = lerp(660, 705, q);      // links oben über dem Ei (rechts ist die Bestenliste)
       if (this.timeLeft < CONFIG.timer.urgentAt && this.phase === 'play') { m.x += rand(-1, 1) * m.heat * 3; m.y += rand(-1, 1) * m.heat * 3; }
     } else if (m.state === 'dive') {
       const k = clamp(m.t / 0.9, 0, 1), e = easeInCubic(k);
@@ -2954,9 +3321,9 @@ function drawRich(ctx, segs, cx, y, o = {}) {
   ctx.restore();
 }
 
-/* Papierkörnung + leichte Vignette – vereinheitlicht alles zu einem "gedruckten" Bild */
+/* Papierkörnung + Vignette. In der Höhle nur eine dunkle Vignette (wird VOR dem HUD gezeichnet). */
 const Grain = {
-  img: null,
+  img: null, vig: null,
   build() {
     const c = Mat.cv(1080, 1920), g = c.getContext('2d');
     const t = Mat.cv(256, 256), tg = t.getContext('2d'), id = tg.createImageData(256, 256), r = mulberry32(99);
@@ -2968,25 +3335,113 @@ const Grain = {
     this.img = c;
   },
   draw(ctx) { if (!this.img) this.build(); ctx.drawImage(this.img, 0, 0); },
+  drawVignette(ctx) {
+    if (!this.vig) {
+      const c = Mat.cv(1080, 1920), g = c.getContext('2d');
+      const vg = g.createRadialGradient(500, 880, 380, 540, 960, 1180); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+      g.fillStyle = vg; g.fillRect(0, 0, 1080, 1920); this.vig = c;
+    }
+    ctx.drawImage(this.vig, 0, 0);
+  },
+};
+
+/* ==========================================================================
+   11b. Glas-Look (wie im Mockup): dunkle, halbtransparente Tafeln mit feiner
+        heller Kante, Pillen-Schilder, glühende Fortschrittsbalken. Gecacht.
+   ========================================================================== */
+const hexA = (hex, a) => rgbStr(hexToRgb(hex), a);
+const fmtPts = p => { p = Math.max(1, Math.round(p)); return p >= 10000 ? Math.round(p / 1000) + 'k' : p >= 1000 ? (p / 1000).toFixed(1).replace('.', ',') + 'k' : String(p); };
+const Glass = {
+  cache: new Map(), P: 28,
+  panel(w, h, r = 26, o = {}) {
+    w = Math.round(w); h = Math.round(h);
+    const key = [w, h, r, o.tint || '', o.border || '', o.alpha || '', o.glow || ''].join('|');
+    let c = this.cache.get(key); if (c) return c;
+    const P = this.P; c = Mat.cv(w + P * 2, h + P * 2); const g = c.getContext('2d');
+    if (o.glow) { g.save(); g.shadowColor = o.glow; g.shadowBlur = 26; g.beginPath(); rr(g, P, P, w, h, r); g.strokeStyle = o.glow; g.lineWidth = 5; g.stroke(); g.restore(); }
+    g.save(); g.shadowColor = 'rgba(0,0,0,0.55)'; g.shadowBlur = 22; g.shadowOffsetY = 8;
+    g.beginPath(); rr(g, P, P, w, h, r); g.fillStyle = `rgba(17,13,12,${o.alpha || 0.64})`; g.fill(); g.restore();
+    g.save(); g.beginPath(); rr(g, P, P, w, h, r); g.clip();
+    if (o.tint) { g.fillStyle = o.tint; g.fillRect(P, P, w, h); }
+    const hl = g.createLinearGradient(0, P, 0, P + Math.min(h, 140)); hl.addColorStop(0, 'rgba(255,238,215,0.12)'); hl.addColorStop(1, 'rgba(255,238,215,0)');
+    g.fillStyle = hl; g.fillRect(P, P, w, h);
+    g.restore();
+    const bd = g.createLinearGradient(0, P, 0, P + h);
+    bd.addColorStop(0, o.border || 'rgba(255,236,210,0.4)'); bd.addColorStop(1, o.border || 'rgba(255,236,210,0.1)');
+    g.beginPath(); rr(g, P + 1, P + 1, w - 2, h - 2, Math.max(2, r - 1)); g.lineWidth = o.border ? 2.5 : 2; g.strokeStyle = bd; g.stroke();
+    if (this.cache.size > 160) this.cache.delete(this.cache.keys().next().value);
+    this.cache.set(key, c); return c;
+  },
+  draw(ctx, x, y, w, h, r, o) { ctx.drawImage(this.panel(w, h, r, o), x - this.P, y - this.P); },
+  /* Pillen-Schild (Namen, Hinweise) */
+  tag(ctx, text, x, y, o = {}) {
+    const size = o.size || 28, h = Math.round(size * 1.48), padX = Math.round(size * 0.62), lead = o.icon ? size * 1.1 : 0;
+    const tw = measureText(ctx, text, size), w = Math.min(o.maxW || 420, tw + padX * 2 + lead);
+    ctx.save(); if (o.alpha != null) ctx.globalAlpha *= o.alpha;
+    ctx.beginPath(); rr(ctx, x - w / 2, y - h / 2, w, h, h / 2);
+    ctx.fillStyle = o.fill || 'rgba(16,12,11,0.72)'; ctx.fill();
+    ctx.lineWidth = 1.6; ctx.strokeStyle = o.border || 'rgba(255,238,215,0.26)'; ctx.stroke();
+    if (o.icon) Icon.draw(ctx, o.icon, x - w / 2 + padX * 0.55 + size * 0.5, y - 1, size * 1.05);
+    drawText(ctx, text, x + lead / 2, y + 1, { size, color: o.color || '#f4ede4', stroke: false, maxWidth: w - padX * 2 - lead });
+    ctx.restore();
+    return w;
+  },
+  /* Fortschrittsbalken: dunkle Rinne, glühende Füllung mit wandernder Lichtwelle */
+  bar(ctx, x, y, w, h, p, c1, c2, t = 0, o = {}) {
+    ctx.save();
+    ctx.beginPath(); rr(ctx, x, y, w, h, h / 2); ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,238,215,0.2)'; ctx.stroke();
+    if (p > 0.002) {
+      ctx.beginPath(); rr(ctx, x, y, w, h, h / 2); ctx.clip();
+      const fw = Math.max(h, w * clamp(p, 0, 1));
+      const g = ctx.createLinearGradient(x, 0, x + fw, 0); g.addColorStop(0, c1); g.addColorStop(1, c2);
+      ctx.fillStyle = g; ctx.beginPath(); rr(ctx, x, y, fw, h, h / 2); ctx.fill();
+      const wx = x + ((t * 170) % (fw + 140)) - 70, wg = ctx.createLinearGradient(wx - 55, 0, wx + 55, 0);
+      wg.addColorStop(0, 'rgba(255,255,255,0)'); wg.addColorStop(0.5, 'rgba(255,250,225,0.3)'); wg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = wg; ctx.fillRect(x, y, fw, h);
+      ctx.fillStyle = 'rgba(255,255,240,0.32)'; ctx.fillRect(x + h / 2, y + h * 0.13, Math.max(0, fw - h), h * 0.18);
+      if (o.edge !== false) { ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.55 + Math.sin(t * 8) * 0.2; const es = h * 1.5; ctx.drawImage(softBlob(o.edgeColor || '#ffb347'), x + fw - es, y + h / 2 - es, es * 2, es * 2); }
+    }
+    ctx.restore();
+  },
+  /* Überschrift in der Serifenschrift, leicht gesperrt */
+  title(ctx, text, x, y, size, color = '#f3e6cf', align = 'center') {
+    const sp = 'letterSpacing' in ctx;
+    if (sp) ctx.letterSpacing = Math.round(size * 0.08) + 'px';
+    drawText(ctx, text, x, y, { size, font: 'serif', color, stroke: false, align });
+    if (sp) ctx.letterSpacing = '0px';
+  },
 };
 
 /* ==========================================================================
    11. HUD – alles Lesbare. Wichtige Infos nur in der sicheren Fläche:
        nicht im unteren Drittel (Chat), nicht am rechten Rand (Buttons).
+       Aufteilung: oben Aufruf + Timer/Fortschritt, rechts die große Bestenliste,
+       links Mission/„So geht's“ + Lexikon, links neben dem Ei die Hype-Säule.
    ========================================================================== */
 const HUD = {
   cta: { key: null, img: null }, board: { sig: '', img: null, kindIdx: 0, switchAt: 0 }, lexImg: null, lexDirty: true,
-  infoNext: 12, infoStart: -99, icons: {}, nests: {}, pauseEgg: null,
+  infoNext: 12, infoStart: -99, icons: {}, nests: {}, pauseEgg: null, bossTex: null, meteorIcon: null,
+  L: { cta: [30, 142, 900, 84], status: [30, 240, 900, 86], board: [540, 342, 400], left: [30, 342, 484], cardH: 204, lexY: 562, hype: [36, 700, 54, 290] },
+  TXT: '#f4ede4', SOFT: '#d8c4a8',
 
   /* ---------- Hilfen ---------- */
   pill(ctx, x, y, w, h, fill, stroke = OUTLINE, lw = 6) {
     ctx.beginPath(); rr(ctx, x, y, w, h, h / 2); ctx.fillStyle = fill; ctx.fill();
     if (lw) { ctx.lineWidth = lw; ctx.strokeStyle = stroke; ctx.stroke(); }
   },
-  /* Mini-Icon einer Art (automatisch eingepasst); mode 'fossil' = als Knochen im Stein */
+  /* Mini-Bild einer Art (Lexikon); mode 'fossil' = helle Silhouette */
   icon(key, mode) {
-    const id = key + '|' + (mode || 'c');
+    const img = DinoArt.has(key), id = key + '|' + (mode || 'c') + (img ? 'i' : 'p');
     if (this.icons[id]) return this.icons[id];
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    if (img) {
+      const im = Assets.img['dino_' + key], s = Math.min(60 / im.naturalWidth, 60 / im.naturalHeight);
+      const sc = Assets.scaled(im, im.naturalWidth * s, im.naturalHeight * s), g = c.getContext('2d');
+      g.drawImage(sc, 32 - sc.width / 2, 62 - sc.height);
+      if (mode === 'fossil') { g.globalCompositeOperation = 'source-in'; g.fillStyle = '#d8c6a4'; g.fillRect(0, 0, 64, 64); }
+      return (this.icons[id] = c);
+    }
     const big = document.createElement('canvas'); big.width = 520; big.height = 460;
     const g = big.getContext('2d');
     Art.drawDino(g, key, 250, 440, { pal: PALETTES.common[SPECIES.findIndex(s => s.key === key) % PALETTES.common.length], t: 0.3, scale: 1, seed: 3 });
@@ -2996,10 +3451,18 @@ const HUD = {
       for (let y = 0; y < 460; y += 2) for (let x = 0; x < 520; x += 2) if (d[(y * 520 + x) * 4 + 3] > 20) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
     } catch (e) { minX = 40; minY = 60; maxX = 480; maxY = 450; }
     if (mode === 'fossil') { g.globalCompositeOperation = 'source-in'; g.fillStyle = '#e7d8b6'; g.fillRect(0, 0, 520, 460); }
-    const c = document.createElement('canvas'); c.width = c.height = 64;
     const w = maxX - minX + 4, h = maxY - minY + 4, s = Math.min(60 / w, 60 / h);
     c.getContext('2d').drawImage(big, minX - 2, minY - 2, w, h, 32 - w * s / 2, 62 - h * s, w * s, h * s);
-    this.icons[id] = c; return c;
+    return (this.icons[id] = c);
+  },
+  /* Steinnest: hintere Hälfte hinter dem Ei, vordere davor (Bild) – sonst das gezeichnete Nest */
+  rockNest(rx) {
+    const key = 'r' + rx; if (this.nests[key]) return this.nests[key];
+    const im = Assets.img.rocks, W = Math.round(rx * 3.1), H = Math.round(W * im.naturalHeight / im.naturalWidth);
+    const full = Assets.scaled(im, W, H), split = Math.round(H * 0.42);      // obere 42 % hinter dem Ei, Rest davor
+    const back = Mat.cv(W, split), front = Mat.cv(W, H - split);
+    back.getContext('2d').drawImage(full, 0, 0); front.getContext('2d').drawImage(full, 0, -split);
+    return (this.nests[key] = { back, front, W, H, split });
   },
   nest(rx) {
     if (this.nests[rx]) return this.nests[rx];
@@ -3020,105 +3483,107 @@ const HUD = {
     return (this.nests[rx] = { back, front, cx, cy });
   },
   drawNest(ctx, x, gy, rx, part) {
+    if (Assets.has('rocks')) {
+      const n = this.rockNest(rx), y0 = Math.round(gy + 10 - n.H * 0.62);     // Ei-Boden sinkt in den Steinhaufen ein
+      if (part === 'back') ctx.drawImage(n.back, x - n.W / 2, y0); else ctx.drawImage(n.front, x - n.W / 2, y0 + n.split);
+      return;
+    }
     const n = this.nest(rx); const img = part === 'back' ? n.back : n.front;
     ctx.drawImage(img, x - n.cx, gy - n.cy + 6);
   },
+  /* lesbarer Text auf Glas: helle Schrift mit feiner dunkler Kante */
+  text(ctx, txt, x, y, o) { return drawText(ctx, txt, x, y, Object.assign({ color: this.TXT, strokeWidth: Math.max(3, (o.size || 30) * 0.1), strokeColor: 'rgba(0,0,0,0.55)', drop: false }, o)); },
 
-  /* ---------- Call-to-Action: Holzschild an zwei Seilen ---------- */
+  /* ---------- Aufruf oben: Glas-Pille ---------- */
   ctaParts() {
     if (Game.mode === 'duel') return ['Kommentiere 1 oder 2 für dein Team!', 'egg'];
-    if (Game.mode === 'boss' && Game.phase === 'intro') return ['Kommentiere jetzt – hol dir deinen Helfer-Dino!', 'foot'];
+    if (Game.mode === 'boss' && Game.phase === 'intro') return ['Kommentiere jetzt – hol dir deinen Helfer!', 'foot'];
     if (Game.mode === 'boss') return ['Kommentiere, um das BOSS-EI zu knacken!', 'egg'];
     return ['Kommentiere, um das Ei zu knacken!', 'egg'];
   },
   renderCTA(text, icon) {
-    const W = 900, c = Mat.cv(W + 40, 230), g = c.getContext('2d');
-    let size = 60, lines;
-    const fits = () => { lines = wrapText(g, text, size, 760, 'title'); return lines.length <= 2 && lines.every((l, i) => measureText(g, l, size, 'title') + (i === lines.length - 1 ? size * 1.2 : 0) <= 800); };
-    while (!fits() && size > 38) size -= 2;
-    const lh = size * 1.14, h = Math.round(lines.length * lh + 40);
-    Mat.put(g, Mat.wood(W, h, 3), 20, 20);
-    lines.forEach((l, i) => {
-      const last = i === lines.length - 1, lw = measureText(g, l, size, 'title'), extra = last ? size * 1.15 : 0, cx = 20 + W / 2 - extra / 2;
-      drawText(g, l, cx, 20 + 22 + lh * (i + 0.5), { size, font: 'title', color: CREAM, strokeWidth: Math.max(7, size * 0.18), extrude: 5 });
-      if (last) Icon.draw(g, icon, cx + lw / 2 + size * 0.68, 20 + 22 + lh * (i + 0.5), size * 1.05);
-    });
-    c.signH = h; return c;
+    const [, , W, H] = this.L.cta, P = Glass.P;
+    const c = Mat.cv(W + P * 2, H + P * 2), g = c.getContext('2d');
+    g.drawImage(Glass.panel(W, H, H / 2, { border: 'rgba(255,190,110,0.55)', tint: 'rgba(255,140,40,0.06)' }), 0, 0);
+    let size = 50; while (size > 36 && measureText(g, text, size, 'title') > W - 160) size -= 2;
+    const tw = Math.min(W - 160, measureText(g, text, size, 'title')), cy = P + H / 2, cx = P + W / 2 + 32;
+    const ix = cx - tw / 2 - 46, egg = icon === 'egg' ? Assets.get('egg_' + (1 + (Game.eggNumber % 6))) || Assets.get('egg_1') : null;
+    if (egg) { const eh = 60, ew = eh * egg.naturalWidth / egg.naturalHeight; g.drawImage(Assets.scaled(egg, ew, eh), ix - ew / 2, cy - eh / 2); }
+    else Icon.draw(g, icon, ix, cy, 52);
+    drawText(g, text, cx, cy + 6, { size, font: 'title', color: 'rgba(0,0,0,0.5)', stroke: false, maxWidth: W - 160 });
+    const gr = g.createLinearGradient(0, -size * 0.5, 0, size * 0.5); gr.addColorStop(0, '#fff6df'); gr.addColorStop(1, '#ffc25a');
+    drawText(g, text, cx, cy + 2, { size, font: 'title', color: gr, stroke: false, maxWidth: W - 160 });
+    return c;
   },
   drawCTA(ctx, t) {
-    const [text, icon] = this.ctaParts(), key = text + icon;
+    const [text, icon] = this.ctaParts(), key = text + icon + (icon === 'egg' ? Game.eggNumber % 6 : '') + Assets.loaded;
     if (key !== this.cta.key) { this.cta.key = key; this.cta.img = this.renderCTA(text, icon); }
-    const img = this.cta.img, cx = CONFIG.layout.centerX, top = 146;
-    ctx.save(); ctx.translate(cx, 96); ctx.rotate(Math.sin(t * 1.3) * 0.008); ctx.translate(-cx, -96);
-    for (const sx of [-360, 360]) {                       // Seile
-      ctx.lineCap = 'round'; ctx.strokeStyle = OUTLINE; ctx.lineWidth = 9; ctx.beginPath(); ctx.moveTo(cx + sx * 1.04, 70); ctx.lineTo(cx + sx, top + 10); ctx.stroke();
-      ctx.strokeStyle = '#d6b483'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(cx + sx * 1.04, 70); ctx.lineTo(cx + sx, top + 10); ctx.stroke();
-    }
-    ctx.drawImage(img, cx - img.width / 2, top - 20);
+    const [x, y, w, h] = this.L.cta, s = 1 + Math.sin(t * 2.2) * 0.006;
+    ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.scale(s, s);
+    ctx.drawImage(this.cta.img, -w / 2 - Glass.P, -h / 2 - Glass.P);
     ctx.restore();
   },
 
-  /* ---------- Timer + Fortschritt: eine Steintafel ---------- */
+  /* ---------- Timer + Fortschritt ---------- */
   drawStatusRow(ctx, t) {
-    const x = 30, y = 332, w = 900, h = 88;
-    Mat.put(ctx, Mat.stone(w, h, 11), x, y);
+    const [x, y, w, h] = this.L.status;
+    Glass.draw(ctx, x, y, w, h, 28);
     let txt = fmtTime(CONFIG.timer[Game.mode] || 240);
     if (Game.phase === 'play') txt = fmtTime(Game.timeLeft);
     else if (Game.phase === 'hatch' || Game.phase === 'reveal') txt = '–:––';
     else if (Game.phase === 'impact') txt = '0:00';
     const urgent = Game.phase === 'play' && Game.timeLeft <= CONFIG.timer.urgentAt;
-    Icon.draw(ctx, 'meteor', x + 50, y + h / 2 + 2, 62 + (urgent ? Math.sin(t * 9) * 4 : 0));
+    const mi = Assets.get('meteor'), ms = 70 + (urgent ? Math.sin(t * 9) * 5 : 0);
+    if (mi) {
+      if (!this.meteorIcon) this.meteorIcon = Assets.scaled(mi, 76, 76 * mi.naturalHeight / mi.naturalWidth);
+      if (urgent) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.5 + Math.sin(t * 9) * 0.3; ctx.drawImage(softBlob('#ff6a1a'), x + 4, y - 6, 100, 100); ctx.restore(); }
+      ctx.drawImage(this.meteorIcon, x + 52 - ms / 2, y + h / 2 - ms / 2 + 2, ms, ms * this.meteorIcon.height / this.meteorIcon.width);
+    } else Icon.draw(ctx, 'meteor', x + 50, y + h / 2 + 2, 60);
     const ps = urgent ? 1 + Math.max(0, Math.sin(t * 9)) * 0.07 : 1;
     ctx.save(); ctx.translate(x + 172, y + h / 2 + 3); ctx.scale(ps, ps);
-    drawText(ctx, txt, 0, 0, { size: 60, font: 'title', color: urgent ? '#ff6b4a' : '#ffd35c', strokeWidth: 10, extrude: 4 });
+    drawText(ctx, txt, 0, 0, { size: 56, font: 'title', color: urgent ? '#ff5a3c' : '#ffd35c', strokeWidth: 5, strokeColor: 'rgba(0,0,0,0.6)', drop: false });
     ctx.restore();
-    Mat.carve(ctx, x + 272, y + 14, x + 272, y + h - 14);
+    ctx.fillStyle = 'rgba(255,238,215,0.16)'; ctx.fillRect(x + 266, y + 16, 1.5, h - 32);
     if (Game.mode === 'duel' && Game.eggs.length === 2) {
-      const gw = 290, gx = [x + 290, x + 596];
+      const gw = 282, gx = [x + 290, x + 594];
       Game.eggs.forEach((e, i) => {
-        Mat.groove(ctx, gx[i], y + 21, gw, 46);
-        Mat.liquid(ctx, gx[i], y + 21, gw, 46, e.progress, i ? '#7fd3e6' : '#f6a160', i ? '#3c9fbf' : '#dd6234', t);
-        drawText(ctx, `${e.team}: ${Math.floor(e.progress * 100)} %`, gx[i] + gw / 2, y + h / 2 + 2, { size: 38, font: 'title', strokeWidth: 8 });
+        Glass.bar(ctx, gx[i], y + 21, gw, 44, e.progress, i ? '#8fe3ff' : '#ffc07a', i ? '#2f9bd1' : '#e8602a', t, { edgeColor: i ? '#bff0ff' : '#ffd29a' });
+        this.text(ctx, `${e.team}: ${Math.floor(e.progress * 100)} %`, gx[i] + gw / 2, y + h / 2 + 2, { size: 34, font: 'title' });
       });
     } else {
-      const e = Game.eggs[0], p = e ? e.progress : 0, gx = x + 340, gw = w - 360;
-      Icon.draw(ctx, 'egg', x + 306, y + h / 2 + 2, 52);
-      Mat.groove(ctx, gx, y + 21, gw, 46);
-      const cols = Hype.active > 0 ? ['#ffb04a', '#e8442e'] : Game.mode === 'boss' ? ['#cf9bff', '#ff6f9a'] : ['#ffd75a', '#f0862c'];
-      Mat.liquid(ctx, gx, y + 21, gw, 46, p, cols[0], cols[1], t);
-      drawText(ctx, (Game.mode === 'boss' ? 'BOSS  ' : '') + Math.floor(p * 100) + ' %', gx + gw / 2, y + h / 2 + 2, { size: 42, font: 'title', strokeWidth: 9 });
+      const e = Game.eggs[0], p = e ? e.progress : 0, gx = x + 290, gw = w - 316;
+      const cols = Hype.active > 0 ? ['#fff07a', '#ff3d1f'] : Game.mode === 'boss' ? ['#d79bff', '#ff4f9a'] : ['#ffd24a', '#ff5a1f'];
+      Glass.bar(ctx, gx, y + 20, gw, 46, p, cols[0], cols[1], t, { edgeColor: Game.mode === 'boss' ? '#e0b0ff' : '#ffc070' });
+      this.text(ctx, (Game.mode === 'boss' ? 'BOSS  ' : '') + Math.floor(p * 100) + ' %', gx + gw / 2, y + h / 2 + 2, { size: 38, font: 'title' });
     }
   },
 
-  /* ---------- Lexikon: Fossilien im Stein, entdeckte Arten in Farbe ---------- */
+  /* ---------- Lexikon: entdeckte Arten als Mini-Dinos, fehlende als Fossil ---------- */
   renderLex() {
-    const c = Mat.cv(924, 100), g = c.getContext('2d');
-    Mat.put(g, Mat.stone(900, 76, 21), 12, 12);
-    Icon.draw(g, 'bone', 12 + 38, 12 + 38, 46);
-    drawText(g, `${Coll.discovered()}/10`, 12 + 70, 12 + 41, { size: 34, font: 'title', align: 'left', strokeWidth: 7 });
+    const W = this.L.left[2], H = 72, P = Glass.P;
+    const c = Mat.cv(W + P * 2, H + P * 2), g = c.getContext('2d');
+    g.drawImage(Glass.panel(W, H, 24), 0, 0);
+    g.translate(P, P);
+    Icon.draw(g, 'bone', 34, H / 2, 40);
+    drawText(g, `${Coll.discovered()}/10`, 62, H / 2 + 1, { size: 30, font: 'title', align: 'left', color: '#f3e6cf', stroke: false });
     SPECIES.forEach((s, i) => {
-      const found = !!Coll.lexikon[s.key], cx = 12 + 205 + i * 69, cy = 12 + 38;
-      g.beginPath(); g.arc(cx, cy, 31, 0, TAU); g.fillStyle = found ? '#6e5f4c' : '#5b4d3d'; g.fill();
-      g.save(); g.clip(); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(cx - 32, cy - 32, 64, 18); g.restore();
-      g.lineWidth = 3; g.strokeStyle = 'rgba(255,245,225,0.35)'; g.beginPath(); g.arc(cx, cy, 32, 0.15, Math.PI - 0.15); g.stroke();
-      if (found) g.drawImage(this.icon(s.key), cx - 31, cy - 33, 62, 62);
-      else { g.globalAlpha = 0.5; g.drawImage(this.icon(s.key, 'fossil'), cx - 28, cy - 29, 56, 56); g.globalAlpha = 1; }
+      const found = !!Coll.lexikon[s.key], cx = 150 + i * 33.6, cy = H / 2;
+      g.beginPath(); g.arc(cx, cy, 16.5, 0, TAU); g.fillStyle = found ? 'rgba(255,214,140,0.16)' : 'rgba(0,0,0,0.35)'; g.fill();
+      g.lineWidth = 1.5; g.strokeStyle = found ? 'rgba(255,214,140,0.6)' : 'rgba(255,238,215,0.12)'; g.stroke();
+      if (found) g.drawImage(this.icon(s.key), cx - 18, cy - 21, 36, 36);
+      else { g.globalAlpha = 0.42; g.drawImage(this.icon(s.key, 'fossil'), cx - 15, cy - 17, 30, 30); g.globalAlpha = 1; }
     });
     return c;
   },
   drawLex(ctx) {
     if (this.lexDirty || !this.lexImg) { this.lexImg = this.renderLex(); this.lexDirty = false; }
-    ctx.drawImage(this.lexImg, CONFIG.layout.centerX - 462, 418);
+    ctx.drawImage(this.lexImg, this.L.left[0] - Glass.P, this.L.lexY - Glass.P);
   },
 
-  /* ---------- Schriftrolle (y 518–630): Mission hat Vorrang vor "So geht's" ---------- */
-  scroll(ctx, cx, y, tag) {
-    Mat.put(ctx, Mat.paper(900, 104, 5, true), cx - 450, y);
-    if (tag) {
-      const tw = Math.round(measureText(ctx, tag, 26, 'title') + 40);
-      Mat.put(ctx, Mat.wood(tw, 40, 9), cx - 410, y - 16);
-      drawText(ctx, tag, cx - 410 + tw / 2, y + 5, { size: 25, font: 'title', strokeWidth: 6 });
-    }
+  /* ---------- Linke Karte: Mission hat Vorrang vor "So geht's" ---------- */
+  card(ctx, x, y, w, h, tag, tagColor, o) {
+    Glass.draw(ctx, x, y, w, h, 26, o);
+    if (tag) Glass.title(ctx, tag, x + 26, y + 32, 27, tagColor || '#f2c14e', 'left');
   },
   drawInfo(ctx, t) {
     if (Game.phase === 'reveal' || Missions.active || Missions.result) {     // Karte/Mission haben Vorrang → danach zeigen
@@ -3129,50 +3594,50 @@ const HUD = {
     if (t > this.infoNext) { this.infoStart = t; this.infoNext = t + CONFIG.infoBanner.everySec; }
     const k = t - this.infoStart, dur = CONFIG.infoBanner.showSec;
     if (k < 0 || k > dur) return;
-    const inK = easeOutBack(clamp(k / 0.5, 0, 1)), outK = clamp((dur - k) / 0.4, 0, 1);
+    const inK = easeOutCubic(clamp(k / 0.5, 0, 1)), outK = clamp((dur - k) / 0.4, 0, 1);
+    const [x0, y, w] = this.L.left, h = this.L.cardH, x = lerp(-w - 40, x0, inK);
     const lines = Game.mode === 'duel'
-      ? [[{ i: 'comment' }, ' Schreib 1 oder 2 = Team wählen'], [{ i: 'comment' }, ' Kommentar = Stoß     ', { i: 'heart' }, ' Likes = Wackeln']]
-      : [[{ i: 'comment' }, ' Kommentar = Stoß     ', { i: 'heart' }, ' Likes = Wackeln'], [{ i: 'star' }, ' Follow = Riesenriss     ', { i: 'share' }, ' Teilen = Extra-Stoß']];
-    const cx = lerp(-520, CONFIG.layout.centerX, inK);
+      ? [['comment', 'Schreib 1 oder 2 = Team'], ['comment', 'Kommentar = Stoß'], ['heart', 'Likes = Wackeln'], ['star', 'Follow = Riesenriss']]
+      : [['comment', 'Kommentar = Stoß'], ['heart', 'Likes = Wackeln'], ['star', 'Follow = Riesenriss'], ['share', 'Teilen = Extra-Stoß']];
     ctx.save(); ctx.globalAlpha = outK;
-    this.scroll(ctx, cx, 530, "SO GEHT'S");
-    lines.forEach((l, i) => drawRich(ctx, l, cx, 566 + i * 42, { size: 34, color: OUTLINE, stroke: false, maxWidth: 820 }));
+    this.card(ctx, x, y, w, h, "SO GEHT'S");
+    lines.forEach(([ic, txt], i) => { const ly = y + 72 + i * 34; Icon.draw(ctx, ic, x + 44, ly, 30); drawText(ctx, txt, x + 72, ly + 1, { size: 30, align: 'left', color: this.TXT, stroke: false, maxWidth: w - 96 }); });
     ctx.restore();
   },
   drawMission(ctx, t) {
-    const m = Missions.active, res = Missions.result, cx = CONFIG.layout.centerX;
+    const m = Missions.active, res = Missions.result, [x, y, w] = this.L.left, h = this.L.cardH, cx = x + w / 2, cy = y + h / 2;
+    const green = { tint: 'rgba(90,210,120,0.07)', border: 'rgba(127,224,138,0.55)' };
     if (m) {
       const inK = easeOutBack(clamp(m.t / 0.45, 0, 1)), left = Math.max(0, m.dur - m.t), urgent = left < 6;
-      ctx.save(); ctx.translate(cx, 582); ctx.scale(inK, inK); ctx.translate(-cx, -582);
-      if (urgent) { ctx.translate(Math.sin(t * 40) * 2, 0); }
-      this.scroll(ctx, cx, 530, 'MISSION');
-      drawRich(ctx, [{ i: Icon.EMOJI[m.icon] || 'target' }, ' ' + m.label], cx, 564, { size: 38, font: 'title', color: OUTLINE, stroke: false, maxWidth: 820 });
-      const bw = 520, bx = cx - 330, by = 590, bh = 28, p = clamp(m.got / m.target, 0, 1);
-      ctx.beginPath(); rr(ctx, bx, by, bw, bh, bh / 2); ctx.fillStyle = 'rgba(120,88,50,0.22)'; ctx.fill();
-      Mat.liquid(ctx, bx, by, bw, bh, p, '#a8d66a', '#5f9a35', t);
-      ctx.lineWidth = 4; ctx.strokeStyle = OUTLINE; ctx.beginPath(); rr(ctx, bx, by, bw, bh, bh / 2); ctx.stroke();
-      drawText(ctx, `${Math.min(m.got, m.target)} / ${m.target}`, bx + bw / 2, by + bh / 2 + 1, { size: 26, color: OUTLINE, stroke: false });
-      Icon.draw(ctx, 'clock', bx + bw + 40, by + bh / 2, 34);
-      drawText(ctx, `${Math.ceil(left)} s`, bx + bw + 62, by + bh / 2 + 1, { size: 32, align: 'left', color: urgent ? '#c0392b' : OUTLINE, stroke: false });
+      ctx.save(); ctx.translate(cx, cy); ctx.scale(inK, inK); if (urgent) ctx.translate(Math.sin(t * 40) * 2, 0); ctx.translate(-cx, -cy);
+      this.card(ctx, x, y, w, h, 'MISSION', '#8de88f', green);
+      Icon.draw(ctx, 'clock', x + w - 96, y + 32, 28);
+      drawText(ctx, `${Math.ceil(left)} s`, x + w - 76, y + 33, { size: 30, align: 'left', color: urgent ? '#ff6b4a' : this.TXT, stroke: false });
+      const lines = wrapText(ctx, m.label, 34, w - 100, 'title').slice(0, 2), ly0 = y + (lines.length > 1 ? 80 : 96);
+      Icon.draw(ctx, Icon.EMOJI[m.icon] || 'target', x + 44, ly0 + (lines.length > 1 ? 19 : 0), 44);
+      lines.forEach((l, i) => drawText(ctx, l, x + 78, ly0 + i * 38, { size: 34, font: 'title', align: 'left', color: '#fff3d6', stroke: false, maxWidth: w - 100 }));
+      const by = y + h - 48, bw = w - 52, p = clamp(m.got / m.target, 0, 1);
+      Glass.bar(ctx, x + 26, by, bw, 32, p, '#a6f07a', '#2fb866', t, { edgeColor: '#c8ffb0' });
+      this.text(ctx, `${Math.min(m.got, m.target)} / ${m.target}`, x + 26 + bw / 2, by + 17, { size: 25 });
       ctx.restore();
     } else if (res) {
       const a = clamp((res.life - res.t) / 0.4, 0, 1), s = easeOutBack(clamp(res.t / 0.35, 0, 1));
-      ctx.save(); ctx.globalAlpha = a; ctx.translate(cx, 582); ctx.scale(s, s); ctx.translate(-cx, -582);
-      this.scroll(ctx, cx, 530, null);
-      drawRich(ctx, [{ i: res.ok ? 'check' : 'clock' }, res.ok ? ' GESCHAFFT!' : ' Knapp verpasst!'], cx, 564, { size: 46, font: 'title', color: res.ok ? '#4f8a2a' : '#b5482a', stroke: false });
-      drawText(ctx, res.ok ? 'MEGA-RISS fürs Ei!' : 'Die nächste Mission kommt bald …', cx, 608, { size: 30, color: OUTLINE, stroke: false });
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(cx, cy); ctx.scale(s, s); ctx.translate(-cx, -cy);
+      this.card(ctx, x, y, w, h, null, null, res.ok ? green : { border: 'rgba(255,140,90,0.5)' });
+      drawRich(ctx, [{ i: res.ok ? 'check' : 'clock' }, res.ok ? ' GESCHAFFT!' : ' Knapp verpasst!'], cx, y + 78, { size: 48, font: 'title', color: res.ok ? '#9cf08a' : '#ffad7a', stroke: false });
+      drawText(ctx, res.ok ? 'MEGA-RISS fürs Ei!' : 'Die nächste Mission kommt bald …', cx, y + 138, { size: 31, color: this.TXT, stroke: false, maxWidth: w - 40 });
       ctx.restore();
     }
   },
 
-  /* ---------- Hype: Steinsäule mit Lava ---------- */
+  /* ---------- Hype: Glas-Säule mit Lava ---------- */
   drawHype(ctx, t) {
     if (!CONFIG.hype.enabled) return;
-    const x = 878, y0 = 716, w = 58, h = 316, on = Hype.active > 0;
-    if (on) { ctx.globalAlpha = 0.55 + Math.sin(t * 12) * 0.25; ctx.drawImage(softBlob('#ff7a2f'), x - 50, y0 - 40, w + 100, h + 80); ctx.globalAlpha = 1; }
-    Mat.put(ctx, Mat.stone(w, h, 41), x, y0);
-    const gx = x + 13, gy = y0 + 14, gw = w - 26, gh = h - 28;
-    ctx.beginPath(); rr(ctx, gx, gy, gw, gh, gw / 2); ctx.fillStyle = '#4a3a2b'; ctx.fill();
+    const [x, y0, w, h] = this.L.hype, on = Hype.active > 0;
+    if (on) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.5 + Math.sin(t * 12) * 0.25; ctx.drawImage(softBlob('#ff7a2f'), x - 60, y0 - 50, w + 120, h + 100); ctx.restore(); }
+    Glass.draw(ctx, x, y0, w, h, w / 2);
+    const gx = x + 11, gy = y0 + 11, gw = w - 22, gh = h - 22;
+    ctx.beginPath(); rr(ctx, gx, gy, gw, gh, gw / 2); ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
     const fh = gh * clamp(Hype.value, 0, 1);
     if (fh > 1) {
       ctx.save(); ctx.beginPath(); rr(ctx, gx, gy, gw, gh, gw / 2); ctx.clip();
@@ -3180,58 +3645,71 @@ const HUD = {
       ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(gx, gy + gh);
       for (let xx = 0; xx <= gw; xx += 4) ctx.lineTo(gx + xx, gy + gh - fh + Math.sin(xx * 0.3 + t * 7) * 3);
       ctx.lineTo(gx + gw, gy + gh); ctx.closePath(); ctx.fill();
-      if (on) { ctx.fillStyle = 'rgba(255,240,180,0.7)'; for (let i = 0; i < 5; i++) { const by = gy + gh - ((t * 60 + i * 61) % fh); ctx.beginPath(); ctx.arc(gx + gw / 2 + Math.sin(i * 2 + t * 3) * 6, by, 3 + (i % 2), 0, TAU); ctx.fill(); } }
+      if (on) { ctx.fillStyle = 'rgba(255,240,180,0.75)'; for (let i = 0; i < 5; i++) { const by = gy + gh - ((t * 60 + i * 61) % fh); ctx.beginPath(); ctx.arc(gx + gw / 2 + Math.sin(i * 2 + t * 3) * 5, by, 3 + (i % 2), 0, TAU); ctx.fill(); } }
       ctx.restore();
     }
-    'HYPE'.split('').forEach((ch, i) => drawText(ctx, ch, x + w / 2, y0 + 56 + i * 60, { size: 32, font: 'title', strokeWidth: 7 }));
-    Icon.draw(ctx, 'flame', x + w / 2, y0 - 30, 58 + (on ? Math.sin(t * 14) * 6 : 0), t);
-    if (on) drawText(ctx, `x${CONFIG.hype.multiplier}`, x + w / 2, y0 + h + 34, { size: 40, font: 'title', color: '#ffd35c', strokeWidth: 8, extrude: 3 });
+    'HYPE'.split('').forEach((ch, i) => this.text(ctx, ch, x + w / 2, y0 + 52 + i * 56, { size: 30, font: 'title', color: '#fff3d6' }));
+    Icon.draw(ctx, 'flame', x + w / 2, y0 - 30, 54 + (on ? Math.sin(t * 14) * 6 : 0), t);
+    if (on) this.text(ctx, `x${CONFIG.hype.multiplier}`, x + w / 2 + 6, y0 + h + 34, { size: 40, font: 'title', color: '#ffd35c' });
   },
 
-  /* ---------- Top-5 "Beste Knacker": Steintafel ---------- */
+  /* ---------- Bestenliste "TOP KNACKER" (rechts oben, groß) ---------- */
   drawBoard(ctx, t) {
     if (Game.mode === 'duel' || Game.phase === 'reveal') return;
-    const kinds = ['egg', 'today', 'all'], titles = { egg: 'dieses Ei', today: 'heute', all: 'gesamt' };
+    const kinds = ['egg', 'today', 'all'];
     if (t > this.board.switchAt) { this.board.kindIdx = (this.board.kindIdx + 1) % 3; this.board.switchAt = t + CONFIG.leaderboard.rotateSec; Game.boardDirty = true; }
     const kind = kinds[this.board.kindIdx];
     if (Game.boardDirty || !this.board.img || t - (this.board.at || 0) > 1) {
       Game.boardDirty = false; this.board.at = t;
       const rows = Board.top(kind, 5);
       const sig = kind + (CONFIG.avatars.enabled ? 'A' : '') + [...Game.kings].join(',') + rows.map(r => { const u = Users.map.get(r.id); return r.name + Math.round(r.pts) + (u && Avatars.get(u) ? '*' : ''); }).join('|');
-      if (sig !== this.board.sig) { this.board.sig = sig; this.board.img = this.renderBoard(titles[kind], rows, kind); }
+      if (sig !== this.board.sig) { this.board.sig = sig; this.board.img = this.renderBoard(kind, rows); }
     }
-    ctx.drawImage(this.board.img, 12 - Mat.P, 640 - Mat.P);
+    const [x, y] = this.L.board;
+    ctx.drawImage(this.board.img, x - Glass.P, y - Glass.P);
   },
-  renderBoard(title, rows, kind) {
-    const W = 364, H = 386, P = Mat.P;
+  renderBoard(kind, rows) {
+    const W = this.L.board[2], head = 108, rowH = 70, H = head + rowH * 5 + 16, P = Glass.P;
     const c = Mat.cv(W + P * 2, H + P * 2), g = c.getContext('2d');
-    g.drawImage(Mat.stone(W, H, 31), 0, 0);
+    g.drawImage(Glass.panel(W, H, 30), 0, 0);
     g.translate(P, P);
-    Icon.draw(g, 'trophy', 42, 40, 50);
-    drawText(g, 'BESTE KNACKER', 76, 32, { size: 30, font: 'title', align: 'left', maxWidth: W - 92, strokeWidth: 7, extrude: 3 });
-    drawText(g, title, 78, 66, { size: 25, align: 'left', color: '#ffd35c', strokeWidth: 6 });
-    Mat.carve(g, 18, 88, W - 18, 88);
-    if (!rows.length) { drawText(g, 'Noch niemand –', W / 2, 200, { size: 32, strokeWidth: 7 }); drawText(g, 'schreib was!', W / 2, 242, { size: 32, strokeWidth: 7 }); return c; }
+    Glass.title(g, 'TOP KNACKER', W / 2, 42, 38);
+    const tabs = [['egg', 'dieses Ei'], ['today', 'heute'], ['all', 'gesamt']];
+    const tw = tabs.map(([, l]) => measureText(g, l, 21) + 28), total = tw.reduce((a, b) => a + b, 0) + 16;
+    let px = W / 2 - total / 2;
+    tabs.forEach(([k, l], i) => {
+      const on = k === kind;
+      g.beginPath(); rr(g, px, 68, tw[i], 30, 15); g.fillStyle = on ? 'rgba(242,193,78,0.92)' : 'rgba(255,238,215,0.08)'; g.fill();
+      drawText(g, l, px + tw[i] / 2, 84, { size: 21, color: on ? '#2a1a0c' : 'rgba(243,230,207,0.72)', stroke: false });
+      px += tw[i] + 8;
+    });
+    g.fillStyle = 'rgba(255,238,215,0.16)'; g.fillRect(22, head, W - 44, 1.5);
+    if (!rows.length) {
+      drawText(g, 'Noch niemand –', W / 2, head + 150, { size: 34, color: this.TXT, stroke: false });
+      drawText(g, 'schreib was!', W / 2, head + 196, { size: 34, color: '#ffd35c', stroke: false });
+      return c;
+    }
+    const RANK = ['#f2c14e', '#dfe3e8', '#e3985a', '#b9ab9b', '#b9ab9b'];
     rows.forEach((r, i) => {
-      const y = 122 + i * 60, u = Users.map.get(r.id), coin = 'coin' + Math.min(4, i + 1);
-      if (CONFIG.avatars.enabled && u) {
-        Avatars.draw(g, u, 42, y, 25, OUTLINE);
-        Icon.draw(g, coin, 62, y + 17, 26);
-        drawText(g, String(i + 1), 62, y + 18, { size: 15, color: OUTLINE, stroke: false });
-      } else {
-        Icon.draw(g, coin, 42, y, 46);
-        drawText(g, String(i + 1), 42, y + 2, { size: 24, font: 'title', color: OUTLINE, stroke: false });
+      const cy = head + 8 + rowH * i + rowH / 2, u = Users.map.get(r.id);
+      if (i === 0) {
+        const hg = g.createLinearGradient(0, 0, W, 0); hg.addColorStop(0, 'rgba(242,193,78,0.2)'); hg.addColorStop(1, 'rgba(242,193,78,0)');
+        g.fillStyle = hg; g.beginPath(); rr(g, 10, cy - rowH / 2 + 4, W - 20, rowH - 8, 18); g.fill();
       }
-      let nx = 82;
-      if (kind === 'egg' && i === 0 && Game.kings.has(r.id)) { Icon.draw(g, 'crown', nx + 16, y - 10, 30); nx += 36; }
-      drawText(g, r.name, nx, y - 9, { size: 34, align: 'left', maxWidth: W - nx - 14, strokeWidth: 7 });
-      drawText(g, `${Math.max(1, Math.round(r.pts))} Pkt.`, 82, y + 19, { size: 22, align: 'left', color: '#ffd35c', strokeWidth: 5 });
-      if (i < rows.length - 1) Mat.carve(g, 22, y + 30, W - 22, y + 30);
+      drawText(g, (i + 1) + '.', 40, cy + 2, { size: 32, font: 'serif', color: RANK[i], stroke: false });
+      if (u) Avatars.draw(g, u, 96, cy, 27, RANK[i]);
+      else { g.beginPath(); g.arc(96, cy, 27, 0, TAU); g.fillStyle = '#5a5148'; g.fill(); }
+      let nx = 136;
+      if (kind === 'egg' && i === 0 && Game.kings.has(r.id)) { Icon.draw(g, 'crown', nx + 14, cy - 1, 30); nx += 34; }
+      const pts = fmtPts(r.pts), pw = measureText(g, pts, 28);
+      drawText(g, r.name, nx, cy + 1, { size: 31, align: 'left', color: '#f7efe4', stroke: false, maxWidth: W - nx - pw - 36 });
+      drawText(g, pts, W - 24, cy + 1, { size: 28, align: 'right', color: i === 0 ? '#ffd35c' : this.SOFT, stroke: false });
+      if (i < rows.length - 1) { g.fillStyle = 'rgba(255,238,215,0.08)'; g.fillRect(28, cy + rowH / 2, W - 56, 1); }
     });
     return c;
   },
 
-  /* ---------- Duell: Steinscheiben mit Teamfarbe ---------- */
+  /* ---------- Duell: Team-Abzeichen über den Eiern ---------- */
   drawDuelLabels(ctx, t) {
     if (Game.mode !== 'duel') return;
     const xs = Game.eggXs('duel');
@@ -3243,13 +3721,12 @@ const HUD = {
     [1, 2].forEach((team, i) => {
       const e = Game.eggs.find(e => e.team === team);
       if (e && e.state === 'roll') return;
-      const x = e ? e.x : xs[i], col = team === 1 ? '#e8743e' : '#3fa6c4';
-      const y = CONFIG.layout.groundY - 412 + Math.sin(t * 3 + i) * 4;
-      Mat.put(ctx, Mat.disc(54, team, col), x - 54, y - 54);
-      drawText(ctx, String(team), x, y + 4, { size: 72, font: 'title', strokeWidth: 10, extrude: 5 });
-      const label = `${this._teams[team]} im Team`, tw = Math.round(measureText(ctx, label, 30) + 36);
-      Mat.put(ctx, Mat.paper(tw, 44, 20 + team), x - tw / 2, y + 62);
-      drawText(ctx, label, x, y + 85, { size: 30, color: OUTLINE, stroke: false });
+      const x = e ? e.x : xs[i], col = team === 1 ? '#ff8a4a' : '#45b8e6';
+      const y = CONFIG.layout.groundY - 424 + Math.sin(t * 3 + i) * 4;
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.45; ctx.drawImage(softBlob(col), x - 90, y - 90, 180, 180); ctx.restore();
+      ctx.beginPath(); ctx.arc(x, y, 50, 0, TAU); ctx.fillStyle = 'rgba(17,13,12,0.75)'; ctx.fill(); ctx.lineWidth = 6; ctx.strokeStyle = col; ctx.stroke();
+      this.text(ctx, String(team), x, y + 4, { size: 66, font: 'title', color: '#fff3d6' });
+      Glass.tag(ctx, `${this._teams[team]} im Team`, x, y + 84, { size: 26, border: hexA(col, 0.6) });
     });
   },
 
@@ -3259,7 +3736,7 @@ const HUD = {
       const k = p.t / p.life;
       const a = k < 0.12 ? k / 0.12 : k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
       const s = k < 0.15 ? easeOutBack(k / 0.15) : 1;
-      drawText(ctx, p.text, clamp(p.x, 130, 860), p.y - 80 * easeOutCubic(k), { size: p.size * s, font: p.font, color: p.color, alpha: a, strokeWidth: Math.max(7, p.size * 0.2) });
+      drawText(ctx, p.text, clamp(p.x, 130, 860), p.y - 80 * easeOutCubic(k), { size: p.size * s, font: p.font, color: p.color, alpha: a, strokeWidth: Math.max(7, p.size * 0.2), strokeColor: '#1c120c' });
     }
   },
 
@@ -3269,138 +3746,136 @@ const HUD = {
       const k = c.t / c.life, a = k > 0.75 ? 1 - (k - 0.75) / 0.25 : 1;
       const s = easeOutBack(clamp(c.t / 0.35, 0, 1)) * (1 + Math.sin(c.t * 10) * 0.02);
       ctx.save(); ctx.translate(c.x, c.y - 50 * easeOutCubic(k)); ctx.rotate(-0.03); ctx.scale(s, s);
-      drawText(ctx, c.text, 0, 0, { size: c.size, font: 'title', color: c.color, alpha: a, maxWidth: 820, strokeWidth: Math.max(10, c.size * 0.17), extrude: 8 });
+      drawText(ctx, c.text, 0, 0, { size: c.size, font: 'title', color: c.color, alpha: a, maxWidth: 820, strokeWidth: Math.max(10, c.size * 0.17), strokeColor: '#1c120c', extrude: 8 });
       ctx.restore();
     }
   },
 
-  /* ---------- Sprechblase des Eis: Papier mit handgezeichnetem Rand ---------- */
+  /* ---------- Sprechblase des Eis (Glas) ---------- */
   drawBubble(ctx, t) {
     const b = Bubbles.cur; if (!b || !CONFIG.bubbles.enabled) return;
     const e = b.egg && Game.eggs.includes(b.egg) ? b.egg : Game.eggs[0];
     if (!e || (e.state !== 'idle' && e.state !== 'drop')) return;
     const k = b.t, a = clamp((b.life - k) / 0.3, 0, 1), s = easeOutBack(clamp(k / 0.3, 0, 1));
     const text = String(b.text).replace(/\s*\p{Extended_Pictographic}️?/gu, '').trim();
-    const lines = wrapText(ctx, text, 34, 300);
-    const w = Math.min(350, Math.max(...lines.map(l => measureText(ctx, l, 34))) + 48), h = lines.length * 40 + 32;
-    const topY = e.groundY - e.ry * 1.95 - e.h;
-    let bx = clamp(e.x + e.rx * 0.55, 380 + w / 2, 870 - w / 2), by = Math.max(topY - 30, 668 + h / 2);
-    if (Game.mode === 'duel' && e.team === 1) bx = clamp(e.x - e.rx * 0.2, 40 + w / 2, 870 - w / 2);
-    const r = mulberry32(hashStr(text)), j = () => (r() - 0.5) * 4;
-    ctx.save(); ctx.globalAlpha = a; ctx.translate(bx, by); ctx.scale(s, s); ctx.rotate(Math.sin(t * 2) * 0.015);
-    const tx = clamp(e.x - bx, -w / 2 + 34, w / 2 - 34);
-    const path = () => {
-      ctx.beginPath(); ctx.moveTo(-w / 2 + 20, -h / 2 + j());
-      ctx.lineTo(0, -h / 2 + j()); ctx.lineTo(w / 2 - 20, -h / 2 + j()); ctx.quadraticCurveTo(w / 2 + j(), -h / 2 + j(), w / 2 + j(), -h / 2 + 20);
-      ctx.lineTo(w / 2 + j(), h / 2 - 20); ctx.quadraticCurveTo(w / 2 + j(), h / 2 + j(), w / 2 - 20, h / 2 + j());
-      ctx.lineTo(tx + 14, h / 2 + j()); ctx.lineTo(tx - 26, h / 2 + 36); ctx.lineTo(tx - 16, h / 2 + j());
-      ctx.lineTo(-w / 2 + 20, h / 2 + j()); ctx.quadraticCurveTo(-w / 2 + j(), h / 2 + j(), -w / 2 + j(), h / 2 - 20);
-      ctx.lineTo(-w / 2 + j(), -h / 2 + 20); ctx.quadraticCurveTo(-w / 2 + j(), -h / 2 + j(), -w / 2 + 20, -h / 2 + j()); ctx.closePath();
-    };
-    ctx.save(); ctx.translate(0, 5); path(); ctx.fillStyle = 'rgba(40,24,10,0.25)'; ctx.fill(); ctx.restore();
-    path(); ctx.fillStyle = '#fff8e6'; ctx.fill(); ctx.lineWidth = 5; ctx.lineJoin = 'round'; ctx.strokeStyle = OUTLINE; ctx.stroke();
-    lines.forEach((l, i) => drawText(ctx, l, 0, -h / 2 + 34 + i * 40, { size: 34, color: OUTLINE, stroke: false }));
+    const size = 31, lines = wrapText(ctx, text, size, 290);
+    const w = Math.min(340, Math.max(...lines.map(l => measureText(ctx, l, size))) + 48), h = lines.length * 38 + 30;
+    const top = e.groundY - e.ry * 1.95 - e.h;
+    let bx, by;
+    if (Game.mode === 'duel') { bx = clamp(e.x + (e.team === 1 ? 1 : -1) * (64 + w / 2), 40 + w / 2, 940 - w / 2); by = CONFIG.layout.groundY - 440; }
+    else { bx = clamp(e.x + e.rx + w / 2 - 4, 40 + w / 2, 940 - w / 2); by = Math.max(top + 60, this.L.board[1] + 490 + h / 2); }
+    const tipX = clamp(e.x - bx, -w / 2 - 30, w / 2 - 20), ax = clamp(tipX + 34, -w / 2 + 30, w / 2 - 30);   // Spitze zeigt zum Ei
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(bx, by); ctx.scale(s, s); ctx.rotate(Math.sin(t * 2) * 0.012);
+    ctx.beginPath(); rr(ctx, -w / 2, -h / 2, w, h, 24);
+    ctx.moveTo(ax + 15, h / 2 - 1); ctx.lineTo(tipX, h / 2 + 38); ctx.lineTo(ax - 15, h / 2 - 1);
+    ctx.fillStyle = 'rgba(17,13,12,0.82)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,214,150,0.5)'; ctx.beginPath(); rr(ctx, -w / 2, -h / 2, w, h, 24); ctx.stroke();
+    lines.forEach((l, i) => drawText(ctx, l, 0, -h / 2 + 34 + i * 38, { size, color: '#fff3d6', stroke: false }));
     ctx.restore();
   },
 
-  /* ---------- Einblendungen: Papierzettel mit Klebestreifen ---------- */
+  /* ---------- Einblendungen: Glas-Pille über dem Chat ---------- */
   drawToasts(ctx) {
-    let y = Math.min(CONFIG.layout.safeBottom - 46, CONFIG.layout.groundY + 124);
+    let y = 1238;
     for (const tt of Game.toasts) {
       const inK = clamp(tt.t / 0.3, 0, 1), outK = clamp((tt.life - tt.t) / 0.35, 0, 1);
-      const size = tt.prio >= 3 ? 42 : 38, icon = Icon.EMOJI[tt.icon] || null;
+      const size = tt.prio >= 3 ? 38 : 34, icon = Icon.EMOJI[tt.icon] || null;
       const u = CONFIG.avatars.enabled && tt.uid != null ? Users.map.get(tt.uid) : null;
-      const lead = (icon ? 56 : 0) + (u ? 66 : 0);
-      const tw = Math.min(900, Math.ceil((measureText(ctx, tt.text, size) + 64 + lead) / 40) * 40);
-      ctx.save(); ctx.globalAlpha = outK; ctx.translate(CONFIG.layout.centerX, y); const s = easeOutBack(inK); ctx.scale(s, s); ctx.rotate(-0.012);
-      Mat.put(ctx, Mat.paper(tw, 80, 7 + tw), -tw / 2, -40);
-      ctx.fillStyle = 'rgba(236,222,170,0.75)'; ctx.save(); ctx.translate(0, -40); ctx.rotate(0.06); ctx.fillRect(-46, -12, 92, 24); ctx.restore();
-      let x = -tw / 2 + 32;
-      if (icon) { Icon.draw(ctx, icon, x + 22, 2, 46, now()); x += 56; }
-      if (u) { Avatars.draw(ctx, u, x + 28, 2, 28, OUTLINE); x += 66; }
-      const textW = tw - (x + tw / 2) - 26;
-      drawText(ctx, tt.text, x + textW / 2, 4, { size, maxWidth: textW, color: OUTLINE, stroke: false });
+      const lead = (icon ? 52 : 0) + (u ? 60 : 0), h = 76;
+      const tw = Math.min(900, Math.ceil((measureText(ctx, tt.text, size) + 70 + lead) / 20) * 20);
+      ctx.save(); ctx.globalAlpha = outK; ctx.translate(CONFIG.layout.centerX, y); const s = easeOutBack(inK); ctx.scale(s, s);
+      const col = tt.color && tt.color !== '#ffffff' ? tt.color : null;
+      Glass.draw(ctx, -tw / 2, -h / 2, tw, h, h / 2, { border: col ? hexA(col, 0.65) : null, alpha: 0.74 });
+      let x = -tw / 2 + 28;
+      if (icon) { Icon.draw(ctx, icon, x + 20, 0, 42, now()); x += 52; }
+      if (u) { Avatars.draw(ctx, u, x + 26, 0, 25, col || 'rgba(255,238,215,0.6)'); x += 60; }
+      const textW = tw / 2 - 26 - x;
+      drawText(ctx, tt.text, x + textW / 2, 2, { size, maxWidth: textW, color: '#f7efe4', stroke: false });
       ctx.restore();
-      y -= 96;
+      y -= 90;
     }
   },
 
-  /* ---------- Modus-Ansage: Holz- bzw. dunkle Steinbänder ---------- */
+  /* ---------- Modus-Ansage: Glas-Band über die ganze Breite ---------- */
   drawAnnounce(ctx, t) {
     const a = Game.announce; if (!a || Game.phase !== 'intro') return;
     const k = Game.phaseT, dur = Game.introDur, left = Math.max(0, dur - k);
     const inK = clamp(k / 0.35, 0, 1), outK = clamp(left / 0.3, 0, 1), vis = Math.min(inK, outK);
-    const cx = CONFIG.layout.centerX, bi = easeOutBack(inK);
+    const cx = CONFIG.layout.centerX, bi = easeOutBack(inK), st = { strokeColor: '#1c120c' };
     ctx.save(); ctx.globalAlpha = vis;
     if (a.mode === 'boss') {
-      const bandY = 560 + LAND_DY, bandH = 330;
-      Mat.put(ctx, Mat.stone(1120, bandH, 61, '#5e4d78'), -20, bandY);
+      const bandY = 640, bandH = 330;
+      Glass.draw(ctx, -40, bandY, 1160, bandH, 0, { tint: 'rgba(130,50,220,0.16)', border: 'rgba(205,150,255,0.6)', alpha: 0.7 });
       const pulse = 1 + Math.sin(t * 6) * 0.04;
       ctx.save(); ctx.translate(cx, bandY + 92); ctx.scale(pulse * bi, pulse * bi);
-      Icon.draw(ctx, 'crown', -250, -6, 90); drawText(ctx, 'BOSS-EI', 30, 0, { size: 118, font: 'title', color: '#e6c4ff', strokeWidth: 16, extrude: 9 }); ctx.restore();
-      if (left > 3.5) drawText(ctx, `in ${Math.ceil(left)} s!`, cx, bandY + 196, { size: 80, font: 'title', color: '#ffd35c', strokeWidth: 13, extrude: 6 });
-      else { const n = Math.ceil(left), f = left - Math.floor(left); ctx.save(); ctx.translate(cx, bandY + 200); ctx.scale(1 + f * 0.6, 1 + f * 0.6); drawText(ctx, String(n), 0, 0, { size: 120, font: 'title', color: '#ff6b4a', strokeWidth: 16, extrude: 8 }); ctx.restore(); }
-      drawText(ctx, 'Kommentiere jetzt – hol dir deinen Helfer!', cx, bandY + 288, { size: 38, maxWidth: 880, strokeWidth: 8 });
+      Icon.draw(ctx, 'crown', -250, -6, 90); drawText(ctx, 'BOSS-EI', 30, 0, Object.assign({ size: 118, font: 'title', color: '#e6c4ff', strokeWidth: 16, extrude: 9 }, st)); ctx.restore();
+      if (left > 3.5) drawText(ctx, `in ${Math.ceil(left)} s!`, cx, bandY + 196, Object.assign({ size: 80, font: 'title', color: '#ffd35c', strokeWidth: 13, extrude: 6 }, st));
+      else { const n = Math.ceil(left), f = left - Math.floor(left); ctx.save(); ctx.translate(cx, bandY + 200); ctx.scale(1 + f * 0.6, 1 + f * 0.6); drawText(ctx, String(n), 0, 0, Object.assign({ size: 120, font: 'title', color: '#ff6b4a', strokeWidth: 16, extrude: 8 }, st)); ctx.restore(); }
+      drawText(ctx, 'Kommentiere jetzt – hol dir deinen Helfer!', cx, bandY + 288, { size: 38, maxWidth: 880, color: '#fff3d6', stroke: false });
     } else if (a.mode === 'duel') {
-      const bandY = 590 + LAND_DY, bandH = 270;
-      Mat.put(ctx, Mat.wood(1120, bandH, 62), -20, bandY);
+      const bandY = 660, bandH = 270;
+      Glass.draw(ctx, -40, bandY, 1160, bandH, 0, { tint: 'rgba(255,170,60,0.08)', border: 'rgba(255,200,120,0.55)', alpha: 0.7 });
       ctx.save(); ctx.translate(cx, bandY + 92); ctx.scale(bi, bi);
-      Icon.draw(ctx, 'bones', -300, -4, 84); drawText(ctx, 'EI-DUELL!', 30, 0, { size: 112, font: 'title', color: '#ffd35c', strokeWidth: 15, extrude: 8 }); ctx.restore();
-      drawText(ctx, 'Schreib 1 oder 2 für dein Team!', cx, bandY + 198, { size: 50, maxWidth: 880, strokeWidth: 10 });
+      Icon.draw(ctx, 'bones', -300, -4, 84); drawText(ctx, 'EI-DUELL!', 30, 0, Object.assign({ size: 112, font: 'title', color: '#ffd35c', strokeWidth: 15, extrude: 8 }, st)); ctx.restore();
+      drawText(ctx, 'Schreib 1 oder 2 für dein Team!', cx, bandY + 198, { size: 50, maxWidth: 880, color: '#fff3d6', stroke: false });
     } else {
-      const bandY = 640 + LAND_DY, bandH = 220;
-      Mat.put(ctx, Mat.wood(1120, bandH, 63), -20, bandY);
+      const bandY = 690, bandH = 220;
+      Glass.draw(ctx, -40, bandY, 1160, bandH, 0, { tint: 'rgba(255,170,60,0.06)', border: 'rgba(255,200,120,0.5)', alpha: 0.66 });
       ctx.save(); ctx.translate(cx, bandY + 86); ctx.scale(bi, bi);
-      drawText(ctx, `EI #${Game.eggNumber}`, 0, 0, { size: 112, font: 'title', color: '#ffd35c', strokeWidth: 15, extrude: 8 }); ctx.restore();
-      drawText(ctx, Game.softer < 1 ? 'Neues Ei – diesmal weicher!' : 'Ein neues Ei rollt an!', cx, bandY + 172, { size: 48, maxWidth: 880, strokeWidth: 9 });
+      drawText(ctx, `EI #${Game.eggNumber}`, 0, 0, Object.assign({ size: 112, font: 'title', color: '#ffd35c', strokeWidth: 15, extrude: 8 }, st)); ctx.restore();
+      drawText(ctx, Game.softer < 1 ? 'Neues Ei – diesmal weicher!' : 'Ein neues Ei rollt an!', cx, bandY + 172, { size: 46, maxWidth: 880, color: '#fff3d6', stroke: false });
     }
     ctx.restore();
   },
 
-  /* ---------- Schlüpf-Karte: Steinrahmen, Pergament, Stoffband ---------- */
+  /* ---------- Schlüpf-Karte: dunkles Glas mit Seltenheits-Leuchten ---------- */
   drawCard(ctx, t) {
     const info = Game.hatchInfo; if (!info || Game.phase !== 'reveal') return;
     const k = Game.phaseT, dur = CONFIG.reveal.cardSec;
     const inK = easeOutBack(clamp(k / 0.45, 0, 1)), outK = clamp((dur - k) / 0.35, 0, 1);
-    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 790 + LAND_DY / 2, W = 900, H = 690;
+    const R = RARITIES[info.rarity], cx = CONFIG.layout.centerX, cy = 872, W = 860, H = 720;
     ctx.save(); ctx.globalAlpha = outK; ctx.translate(cx, cy); ctx.scale(inK, inK);
-    ctx.save(); ctx.rotate(t * 0.3); ctx.fillStyle = R.glow || '#fff3c4'; ctx.globalAlpha *= R.glow ? 0.4 : 0.22;
-    for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-60, -640); ctx.lineTo(60, -640); ctx.closePath(); ctx.fill(); }
+    ctx.save(); ctx.rotate(t * 0.3); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = R.aura || '#ffcf8a'; ctx.globalAlpha *= R.aura ? 0.2 : 0.1;
+    for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-70, -700); ctx.lineTo(70, -700); ctx.closePath(); ctx.fill(); }
     ctx.restore();
-    Mat.put(ctx, Mat.stone(W, H, 71), -W / 2, -H / 2);
-    Mat.put(ctx, Mat.paper(W - 60, H - 118, 72), -W / 2 + 30, -H / 2 + 88);
-    // Stoffband in Seltenheitsfarbe
-    const bw = 560, bh = 66, by = -H / 2 + 20;
-    ctx.lineWidth = 5; ctx.strokeStyle = OUTLINE; ctx.lineJoin = 'round';
-    for (const sd of [-1, 1]) { ctx.beginPath(); ctx.moveTo(sd * bw / 2, by + 14); ctx.lineTo(sd * (bw / 2 + 60), by + 14); ctx.lineTo(sd * (bw / 2 + 40), by + bh / 2 + 14); ctx.lineTo(sd * (bw / 2 + 60), by + bh + 14); ctx.lineTo(sd * bw / 2, by + bh + 14); ctx.closePath(); ctx.fillStyle = R.dark; ctx.fill(); ctx.stroke(); }
-    ctx.beginPath(); rr(ctx, -bw / 2, by, bw, bh, 8); ctx.fillStyle = R.color; ctx.fill(); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fillRect(-bw / 2 + 8, by + 6, bw - 16, 12);
-    drawText(ctx, R.label, 0, by + bh / 2 + 2, { size: 40, font: 'title', strokeWidth: 8, extrude: 3 });
-    for (let i = 0; i < R.stars; i++) for (const sd of [-1, 1]) Icon.draw(ctx, 'star', sd * (bw / 2 - 34 - i * 30), by + bh / 2, 26);
-    let y = -H / 2 + 146;
-    if (info.team) { drawText(ctx, `TEAM ${info.team} GEWINNT!`, 0, y, { size: 50, font: 'title', color: info.team === 1 ? '#e8743e' : '#3fa6c4', strokeWidth: 9, extrude: 4 }); y += 56; }
-    drawText(ctx, info.speciesName, 0, y, { size: 70, font: 'title', color: shade(R.dark, -0.1), stroke: false });
+    Glass.draw(ctx, -W / 2, -H / 2, W, H, 36, { alpha: 0.92, border: hexA(R.color, 0.85), glow: R.aura ? hexA(R.color, 0.9) : null });
+    // Seltenheits-Pille auf der Oberkante
+    const pw = 380, ph = 62, py = -H / 2;
+    const pg = ctx.createLinearGradient(0, py - ph / 2, 0, py + ph / 2); pg.addColorStop(0, R.color); pg.addColorStop(1, R.dark);
+    ctx.beginPath(); rr(ctx, -pw / 2, py - ph / 2, pw, ph, ph / 2); ctx.fillStyle = pg; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.stroke();
+    drawText(ctx, R.label, 0, py + 2, { size: 36, font: 'title', color: '#ffffff', strokeWidth: 6, strokeColor: hexA(R.dark, 0.9), drop: false });
+    for (let i = 0; i < R.stars; i++) for (const sd of [-1, 1]) Icon.draw(ctx, 'star', sd * (pw / 2 + 30 + i * 34), py, 30);
+    let y = -H / 2 + 84;
+    if (info.team) { drawText(ctx, `TEAM ${info.team} GEWINNT!`, 0, y, { size: 46, font: 'title', color: info.team === 1 ? '#ff9a5a' : '#5cc8f0', strokeWidth: 6, strokeColor: '#1c120c', drop: false }); y += 54; }
+    drawText(ctx, info.speciesName, 0, y, { size: 66, font: 'title', color: info.rarity === 'common' ? '#bff08f' : R.color, strokeWidth: 7, strokeColor: '#1c120c', drop: false });
     const nu = CONFIG.avatars.enabled && info.namerId != null ? Users.map.get(info.namerId) : null;
-    const label = `„${info.name}“`;
+    const label = `„${info.name}“`, ny = y + 70;
     if (nu) {
-      const r = 42, gap = 16, tw = Math.min(780 - 2 * r - gap, measureText(ctx, label, 54, 'title')), x0 = -(2 * r + gap + tw) / 2;
-      Avatars.draw(ctx, nu, x0 + r, y + 68, r, OUTLINE);
-      drawText(ctx, label, x0 + 2 * r + gap + tw / 2, y + 68, { size: 54, font: 'title', maxWidth: 780 - 2 * r - gap, strokeWidth: 10, extrude: 4 });
-    } else drawText(ctx, label, 0, y + 68, { size: 54, font: 'title', maxWidth: 780, strokeWidth: 10, extrude: 4 });
-    const dinoH = info.team ? 180 : 210, groundY = y + 68 + 44 + dinoH, sc = Math.min(1.25, dinoH / SPECIES_H[info.species]);
-    if (R.glow) { const gs = 220 + Math.sin(t * 4) * 15; ctx.globalAlpha *= 0.75; ctx.drawImage(softBlob(R.glow), -gs, groundY - dinoH / 2 - gs, gs * 2, gs * 2); ctx.globalAlpha = outK; }
-    ctx.fillStyle = 'rgba(90,60,30,0.18)'; ctx.beginPath(); ctx.ellipse(0, groundY + 4, 150, 16, 0, 0, TAU); ctx.fill();
-    const pal = PALETTES[info.rarity][info.palIdx % PALETTES[info.rarity].length];
-    Art.drawDino(ctx, info.species, 10, groundY - Math.abs(Math.sin(t * 4)) * 10, { pal, t, walk: 0, face: 1, scale: sc, seed: info.seed, blink: (t % 3) < 0.12 ? 1 : 0 });
-    drawText(ctx, 'ist geschlüpft!', 0, groundY + 44, { size: 44, color: OUTLINE, stroke: false });
+      const r = 36, gap = 16, tw = Math.min(760 - 2 * r - gap, measureText(ctx, label, 48, 'title')), x0 = -(2 * r + gap + tw) / 2;
+      Avatars.draw(ctx, nu, x0 + r, ny, r, R.color);
+      drawText(ctx, label, x0 + 2 * r + gap + tw / 2, ny + 2, { size: 48, font: 'title', maxWidth: 760 - 2 * r - gap, color: '#fff3d6', stroke: false });
+    } else drawText(ctx, label, 0, ny + 2, { size: 48, font: 'title', maxWidth: 760, color: '#fff3d6', stroke: false });
+    const dinoH = info.team ? 250 : 290, feet = ny + 44 + dinoH;
+    if (R.aura || R.glow) { const gs = 230 + Math.sin(t * 4) * 15; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha *= 0.55; ctx.drawImage(softBlob(R.aura || R.glow), -gs, feet - dinoH / 2 - gs, gs * 2, gs * 2); ctx.restore(); }
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.beginPath(); ctx.ellipse(0, feet + 4, 150, 16, 0, 0, TAU); ctx.fill();
+    const hop = Math.abs(Math.sin(t * 4)) * 10;
+    if (DinoArt.has(info.species)) {
+      const [w100, h100] = DinoArt.dims(info.species, 100), sz = 100 * Math.min(dinoH / h100, 520 / w100);   // passt in 520 × dinoH
+      const p = DinoArt.pose(info.species, t, 0, sz);
+      DinoArt.draw(ctx, info.species, 0, feet - hop - (info.species === 'pteranodon' ? Math.min(p.bob, 40) : p.bob), { size: sz, rarity: info.rarity, palIdx: info.palIdx, face: 1, sx: p.sx, sy: p.sy });
+    } else {
+      const sc = Math.min(1.25, dinoH / SPECIES_H[info.species]), pal = PALETTES[info.rarity][info.palIdx % PALETTES[info.rarity].length];
+      Art.drawDino(ctx, info.species, 10, feet - hop, { pal, t, walk: 0, face: 1, scale: sc, seed: info.seed, blink: (t % 3) < 0.12 ? 1 : 0 });
+    }
+    drawText(ctx, 'ist geschlüpft!', 0, feet + 42, { size: 40, color: this.SOFT, stroke: false });
     if (info.team) {
       const names = info.members.slice(0, 8).join(' · ') + (info.members.length > 8 ? ` · +${info.members.length - 8}` : '');
-      const lines = wrapText(ctx, names || 'Danke an alle!', 32, 800);
-      lines.slice(0, 2).forEach((l, i) => drawText(ctx, l, 0, groundY + 92 + i * 38, { size: 32, color: '#6a4a2a', stroke: false }));
+      const lines = wrapText(ctx, names || 'Danke an alle!', 30, 780);
+      lines.slice(0, 2).forEach((l, i) => drawText(ctx, l, 0, feet + 90 + i * 36, { size: 30, color: this.TXT, stroke: false }));
     } else if (info.top3.length) {
-      drawText(ctx, 'Top-Helfer', 0, groundY + 88, { size: 28, color: '#8a6a44', stroke: false });
+      drawText(ctx, 'TOP-HELFER', 0, feet + 88, { size: 24, font: 'serif', color: '#f2c14e', stroke: false });
       const segs = []; info.top3.forEach((h, i) => { if (i) segs.push('     '); segs.push({ i: 'coin' + (i + 1) }, ' ' + h.name); });
-      drawRich(ctx, segs, 0, groundY + 130, { size: 34, maxWidth: 800, color: OUTLINE, stroke: false });
+      drawRich(ctx, segs, 0, feet + 128, { size: 32, maxWidth: 780, color: this.TXT, stroke: false });
     }
     ctx.restore();
   },
@@ -3409,58 +3884,61 @@ const HUD = {
   drawImpactText(ctx, t) {
     if (Game.phase !== 'impact' || Game.phaseT < 1.0) return;
     const k = Game.phaseT - 1.0, cx = clamp(Game.meteor && Game.meteor.tx || CONFIG.layout.eggX, 420, 620), out = clamp((5.2 - Game.phaseT) / 0.4, 0, 1);
+    const st = { strokeColor: '#1c120c' };
     ctx.save(); ctx.globalAlpha = out;
-    ctx.save(); ctx.translate(cx, 640 + LAND_DY); ctx.rotate(-0.05); const s = easeOutBack(clamp(k / 0.4, 0, 1)) * (1 + Math.sin(t * 8) * 0.02); ctx.scale(s, s);
-    drawText(ctx, 'BUMM!', 0, 0, { size: 168, font: 'title', color: '#ff8a3d', strokeWidth: 18, extrude: 12 }); ctx.restore();
-    if (k > 0.4) drawText(ctx, 'Der Meteor war schneller!', cx, 776 + LAND_DY, { size: 54, font: 'title', maxWidth: 880, strokeWidth: 10, extrude: 4, alpha: clamp((k - 0.4) / 0.3, 0, 1) });
-    if (k > 0.9 && Game.impactInfo) drawText(ctx, `Ihr hattet ${Math.floor(Game.impactInfo.progress * 100)} % geschafft!`, cx, 852 + LAND_DY, { size: 46, maxWidth: 880, color: '#ffd35c', strokeWidth: 9, alpha: clamp((k - 0.9) / 0.3, 0, 1) });
-    if (k > 1.5) drawText(ctx, 'Das nächste Ei ist weicher!', cx, 922 + LAND_DY, { size: 40, maxWidth: 880, strokeWidth: 8, alpha: clamp((k - 1.5) / 0.3, 0, 1) });
+    ctx.save(); ctx.translate(cx, 760); ctx.rotate(-0.05); const s = easeOutBack(clamp(k / 0.4, 0, 1)) * (1 + Math.sin(t * 8) * 0.02); ctx.scale(s, s);
+    drawText(ctx, 'BUMM!', 0, 0, Object.assign({ size: 168, font: 'title', color: '#ff8a3d', strokeWidth: 18, extrude: 12 }, st)); ctx.restore();
+    if (k > 0.4) drawText(ctx, 'Der Meteor war schneller!', cx, 890, Object.assign({ size: 54, font: 'title', maxWidth: 880, strokeWidth: 10, extrude: 4, color: '#fff3d6', alpha: clamp((k - 0.4) / 0.3, 0, 1) }, st));
+    if (k > 0.9 && Game.impactInfo) drawText(ctx, `Ihr hattet ${Math.floor(Game.impactInfo.progress * 100)} % geschafft!`, cx, 966, Object.assign({ size: 46, maxWidth: 880, color: '#ffd35c', strokeWidth: 9, alpha: clamp((k - 0.9) / 0.3, 0, 1) }, st));
+    if (k > 1.5) drawText(ctx, 'Das nächste Ei ist weicher!', cx, 1036, Object.assign({ size: 40, maxWidth: 880, strokeWidth: 8, color: '#fff3d6', alpha: clamp((k - 1.5) / 0.3, 0, 1) }, st));
     ctx.restore();
   },
 
-  /* ---------- Pause-Screen: Holzschild ---------- */
+  /* ---------- Pause-Screen ---------- */
   drawPause(ctx, t) {
     if (!Game.paused) return;
-    ctx.fillStyle = 'rgba(40,22,8,0.55)'; ctx.fillRect(0, 0, 1080, 1920);
-    if (!this.pauseEgg) this.pauseEgg = EggArt.texture({ rx: 90, ry: 117, base: '#fff3c9', pat: '#ef8d3c', pattern: 'spots', seed: 5 });
+    ctx.fillStyle = 'rgba(8,5,4,0.62)'; ctx.fillRect(0, 0, 1080, 1920);
+    if (!this.pauseEgg || (!this.pauseEgg.isImg && Assets.has('egg_1'))) this.pauseEgg = EggArt.texture({ rx: 90, ry: 117, base: '#f3ead8', pat: '#8a5a3a', pattern: 'spots', seed: 5, img: 'egg_1' });
     const cx = CONFIG.layout.centerX, hop = Math.abs(Math.sin(t * 3)) * 70, sq = 1 + (hop < 8 ? 0.08 : 0);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(cx, 770, 80 - hop * 0.3, 14, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(cx, 770, 80 - hop * 0.3, 14, 0, 0, TAU); ctx.fill();
     ctx.save(); ctx.translate(cx, 770 - hop); ctx.rotate(Math.sin(t * 6) * 0.15); ctx.scale(sq, 2 - sq); ctx.drawImage(this.pauseEgg, -this.pauseEgg.width / 2, -this.pauseEgg.height + 14); ctx.restore();
-    ctx.save(); ctx.translate(cx, 830); ctx.rotate(Math.sin(t * 1.2) * 0.01);
-    Mat.put(ctx, Mat.wood(780, 230, 64), -390, 0);
-    drawText(ctx, "Gleich geht's", 0, 70, { size: 84, font: 'title', color: '#ffd35c', strokeWidth: 13, extrude: 6 });
-    drawText(ctx, 'weiter!', 0, 162, { size: 84, font: 'title', color: '#ffd35c', strokeWidth: 13, extrude: 6 });
+    ctx.save(); ctx.translate(cx, 830);
+    Glass.draw(ctx, -390, 0, 780, 230, 34, { border: 'rgba(255,200,120,0.55)' });
+    const st = { size: 84, font: 'title', color: '#ffd35c', strokeWidth: 12, strokeColor: '#1c120c', extrude: 6 };
+    drawText(ctx, "Gleich geht's", 0, 70, st); drawText(ctx, 'weiter!', 0, 162, st);
     ctx.restore();
-    drawText(ctx, 'Kurze Pause – bleib dran!', cx, 1112, { size: 42, maxWidth: 860, strokeWidth: 8 });
+    drawText(ctx, 'Kurze Pause – bleib dran!', cx, 1112, { size: 42, maxWidth: 860, color: '#fff3d6', stroke: false });
     const wx = 140 + ((t * 90) % 700);
-    Art.drawHelper(ctx, wx, 1225, (t * 20) % 360, { t, walk: 1, face: 1, scale: 1.3 });
+    if (DinoArt.has('trex')) { const p = DinoArt.pose('trex', t, 1, 130); DinoArt.draw(ctx, 'trex', wx, 1300 - p.bob, { size: 130, face: 1, rot: p.rot, sx: p.sx, sy: p.sy }); }
+    else Art.drawHelper(ctx, wx, 1225, (t * 20) % 360, { t, walk: 1, face: 1, scale: 1.3 });
   },
 
   /* ---------- Hinweise für den Host (links im Chat-Bereich, über der Test-Leiste) ---------- */
   drawHints(ctx, t) {
     let y = 1345;
-    if (!Sound.ready) { Mat.put(ctx, Mat.paper(420, 54, 81), 20, y - 27); drawText(ctx, 'Klick/Tippen für Ton', 230, y + 1, { size: 28, color: OUTLINE, stroke: false }); y += 66; }
-    if (Net.testMode) {
-      Mat.put(ctx, Mat.paper(560, 50, 82), 20, y - 25);
-      drawText(ctx, `TESTMODUS · ${Math.round(TestSim.viewers)} simulierte Zuschauer`, 300, y + 1, { size: 26, color: '#b5482a', stroke: false, maxWidth: 520 });
-    }
+    if (!Sound.ready) { Glass.tag(ctx, 'Klick/Tippen für Ton', 200, y, { size: 26 }); y += 60; }
+    if (Net.testMode) Glass.tag(ctx, `TESTMODUS · ${Math.round(TestSim.viewers)} simulierte Zuschauer`, 300, y, { size: 24, color: '#ffb48a', border: 'rgba(255,150,100,0.5)' });
   },
 
   /* ---------- Szene komplett zeichnen ---------- */
   drawScene(ctx, t) {
+    const cave = World.cave();
     const sh = Game.shake * Game.shake * 22;
     ctx.save();
     if (sh > 0.3) ctx.translate(rand(-sh, sh), rand(-sh, sh));
-    World.drawSky(ctx);
+    if (cave) World.drawCave(ctx, t); else World.drawSky(ctx);
     if (Game.phase === 'play' && Game.timeLeft < CONFIG.timer.urgentAt) {
       const u = clamp((CONFIG.timer.urgentAt - Game.timeLeft) / CONFIG.timer.urgentAt, 0, 1);
-      ctx.fillStyle = `rgba(255,70,40,${u * (0.12 + Math.sin(t * 5) * 0.05)})`; ctx.fillRect(0, 0, 1080, 1060 + LAND_DY);
+      ctx.fillStyle = `rgba(255,70,40,${u * (0.12 + Math.sin(t * 5) * 0.05)})`; ctx.fillRect(0, 0, 1080, cave ? 1920 : 1060 + LAND_DY);
     }
+    if (cave) World.drawFlyers(ctx);
     if (Game.meteor && Game.meteor.state !== 'dive') World.drawMeteor(ctx, Game.meteor);
-    World.drawLand(ctx);
-    World.drawHerd(ctx);
-    World.drawGrassAndFerns(ctx);
-    World.drawNightTint(ctx);
+    if (!cave) {
+      World.drawLand(ctx);
+      World.drawHerd(ctx);
+      World.drawGrassAndFerns(ctx);
+      World.drawNightTint(ctx);
+    }
     // Nester + Eier
     const xs = Game.eggs.length ? Game.eggs.map(e => [e.x, e.rx, e]) : Game.eggXs(Game.mode).map(x => [x, (EGG_SIZES[Game.mode] || EGG_SIZES.normal)[0], null]);
     const gy = CONFIG.layout.groundY;
@@ -3472,14 +3950,23 @@ const HUD = {
     if (Game.phase === 'hatch' && Game.hatchInfo) this.drawHatchDino(ctx, t);
     const hs = Game.helpers.slice().sort((a, b) => a.y - b.y);
     for (const h of hs) h.draw(ctx);
+    if (cave) World.drawHerd(ctx);                    // Herde auf dem Höhlenboden (vor der Felskante)
     const tn = now();
     // Namensschilder: Könige immer, sonst die zuletzt aktiven – max. 6, versetzt
     const tagged = Game.helpers.filter(h => h.state !== 'leave' && (Game.kings.has(h.uid) || tn < h.tagUntil))
-      .sort((a, b) => (Game.kings.has(b.uid) - Game.kings.has(a.uid)) || (b.tagUntil - a.tagUntil)).slice(0, 6).sort((a, b) => a.x - b.x);
-    tagged.forEach((h, i) => h.drawTag(ctx, (i % 2) * 36));
+      .sort((a, b) => (Game.kings.has(b.uid) - Game.kings.has(a.uid)) || (b.tagUntil - a.tagUntil)).slice(0, 6);
+    // überlappungsfrei: wichtigste zuerst, wer kollidiert, rutscht eine Etage höher
+    const placed = [];
+    for (const h of tagged) {
+      const b = h.tagBox(ctx);
+      for (let k = 0; k < 4 && placed.some(p => Math.abs(p.x - b.x) < (p.w + b.w) / 2 + 6 && Math.abs(p.y - b.y) < b.hgt + 4); k++) b.y -= b.hgt + 6;
+      placed.push(b);
+    }
+    placed.sort((a, b) => b.y - a.y).forEach(b => b.h.drawTag(ctx, b));
     this.drawFlyHearts(ctx);
     FX.draw(ctx, 1);
     if (Game.meteor && Game.meteor.state === 'dive') World.drawMeteor(ctx, Game.meteor);
+    if (cave) World.drawCaveFront(ctx);
     World.drawFront(ctx);
     FX.draw(ctx, 2);
     this.drawPops(ctx);
@@ -3487,6 +3974,7 @@ const HUD = {
     if (Game.flash > 0.01) { ctx.globalAlpha = Math.min(1, Game.flash) * 0.85; ctx.fillStyle = Game.flashColor; ctx.fillRect(0, 0, 1080, 1920); ctx.globalAlpha = 1; }
     // HYPE: Bildrand glüht
     if (Hype.active > 0) { const a = 0.35 + Math.sin(t * 10) * 0.15; const g = ctx.createRadialGradient(540, 960, 600, 540, 960, 1150); g.addColorStop(0, 'rgba(255,120,40,0)'); g.addColorStop(1, `rgba(255,110,30,${a})`); ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1920); }
+    if (cave) Grain.drawVignette(ctx);
     // HUD
     this.drawCTA(ctx, t);
     this.drawStatusRow(ctx, t);
@@ -3504,7 +3992,7 @@ const HUD = {
     this.drawToasts(ctx);
     this.drawPause(ctx, t);
     this.drawHints(ctx, t);
-    Grain.draw(ctx);                                  // Papierkörnung + Vignette über allem
+    if (!cave) Grain.draw(ctx);                       // Wiesen-Ersatz: Papierkörnung über allem
   },
   /* Like-Herzen fliegen auf einer Kurve zum Ei */
   drawFlyHearts(ctx) {
@@ -3515,21 +4003,25 @@ const HUD = {
       const s = h.s * (0.7 + Math.sin(k * Math.PI) * 0.5) / 20;
       ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(Math.sin(h.t * 8) * 0.2);
       ctx.beginPath(); ctx.moveTo(0, 7); ctx.bezierCurveTo(-24, -8, -11, -26, 0, -12); ctx.bezierCurveTo(11, -26, 24, -8, 0, 7);
-      ctx.fillStyle = h.col; ctx.fill(); ctx.lineWidth = 3.5; ctx.strokeStyle = OUTLINE; ctx.stroke();
+      ctx.fillStyle = h.col; ctx.fill(); ctx.lineWidth = 3.5; ctx.strokeStyle = '#2a0f12'; ctx.stroke();
       ctx.restore();
     }
   },
   drawEgg(ctx, e, t) {
     if (e.state === 'gone') return;
-    const cy = e.ry * 0.95;
+    if (e.wantsImg) e.retex();                         // Ei-Bild ist inzwischen geladen
+    const cy = e.ry * 0.95, cave = World.cave();
     ctx.save();
     ctx.globalAlpha = e.alpha;
-    // ab 90 %: pulsierendes Glühen ("gleich schlüpft's!")
-    if (e.state === 'idle' && e.progress >= 0.9) { const gs = e.rx * 2.2 * (1 + Math.sin(t * 8) * 0.08); ctx.globalAlpha = 0.6 * e.alpha; ctx.drawImage(softBlob('#ffe27a'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.globalAlpha = e.alpha; }
-    if (e.boss && e.state !== 'burst') { const gs = e.rx * 2.1 * (1 + Math.sin(t * 3) * 0.05); ctx.globalAlpha = 0.55 * e.alpha; ctx.drawImage(softBlob('#b86bff'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.globalAlpha = e.alpha; }
+    // Lava-Schein hinter dem Ei: wächst mit dem Fortschritt, ab 90 % pulsiert es ("gleich schlüpft's!")
+    if ((e.state === 'idle' || e.state === 'drop') && e.progress > 0.15 && cave) {
+      const p = e.progress, gs = e.rx * (1.4 + p * 0.9) * (1 + Math.sin(t * (p >= 0.9 ? 8 : 3)) * (p >= 0.9 ? 0.08 : 0.03));
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = e.alpha * (0.12 + p * 0.38); ctx.drawImage(softBlob('#ff7a1f'), e.x - gs, e.groundY - cy - e.h - gs, gs * 2, gs * 2); ctx.restore();
+    } else if (e.state === 'idle' && e.progress >= 0.9) { const gs = e.rx * 2.2 * (1 + Math.sin(t * 8) * 0.08); ctx.globalAlpha = 0.6 * e.alpha; ctx.drawImage(softBlob('#ffe27a'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.globalAlpha = e.alpha; }
+    if (e.boss && e.state !== 'burst') { const gs = e.rx * 2.1 * (1 + Math.sin(t * 3) * 0.05); ctx.save(); ctx.globalCompositeOperation = cave ? 'lighter' : 'source-over'; ctx.globalAlpha = (cave ? 0.4 : 0.55) * e.alpha; ctx.drawImage(softBlob('#b86bff'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.restore(); }
     if (e.state === 'idle' || e.state === 'drop' || e.state === 'roll') {
       // Schatten
-      ctx.fillStyle = 'rgba(30,20,10,0.22)'; ctx.beginPath(); ctx.ellipse(e.x, e.groundY + 4, e.rx * (0.9 - Math.min(e.h, 120) / 400), 16, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = cave ? 'rgba(0,0,0,0.45)' : 'rgba(30,20,10,0.22)'; ctx.beginPath(); ctx.ellipse(e.x, e.groundY + 4, e.rx * (0.9 - Math.min(e.h, 120) / 400), 16, 0, 0, TAU); ctx.fill();
       const breathe = Math.sin(t * 2.2 + e.phase) * 0.012 * (1 - (e.intensity || 0) * 0.5);
       const sq = e.squash;
       ctx.translate(e.x, e.groundY - e.h - e.drop);
@@ -3538,14 +4030,14 @@ const HUD = {
       ctx.translate(0, -cy);
       ctx.drawImage(e.tex, -e.tex.width / 2, -e.tex.height / 2);
       if (e.stage > 0) EggArt.drawCracks(ctx, e, e.progress, Game.t);
-      if (e.flash > 0.01) { ctx.globalAlpha = e.flash * 0.6 * e.alpha; ctx.fillStyle = '#ffffff'; ctx.fill(EggArt.path(e.rx, e.ry)); ctx.globalAlpha = e.alpha; }
+      if (e.flash > 0.01) { ctx.globalAlpha = e.flash * 0.55 * e.alpha; const w = EggArt.tint(e.tex, '#fff8e8'); ctx.drawImage(w, -w.width / 2, -w.height / 2); ctx.globalAlpha = e.alpha; }
       if (e.bigCrack > 0) {                         // Follow: Riesenriss-Blitz
-        ctx.save(); ctx.clip(EggArt.path(e.rx, e.ry));
+        ctx.save(); ctx.clip(EggArt.path(e.rx * 0.97, e.ry * 0.98));
         ctx.strokeStyle = `rgba(255,240,150,${Math.min(1, e.bigCrack * 1.6)})`; ctx.lineWidth = 12; ctx.lineJoin = 'miter';
         const r = mulberry32(e.seed + Math.floor(e.bigCrack * 10));
         ctx.beginPath(); let x = -e.rx, y = -e.ry * 0.2; ctx.moveTo(x, y);
         while (x < e.rx) { x += e.rx * (0.15 + r() * 0.15); y += (r() - 0.5) * e.ry * 0.35; ctx.lineTo(x, y); }
-        ctx.stroke(); ctx.strokeStyle = OUTLINE; ctx.lineWidth = 4; ctx.stroke(); ctx.restore();
+        ctx.stroke(); ctx.strokeStyle = '#2a0f05'; ctx.lineWidth = 4; ctx.stroke(); ctx.restore();
       }
     } else if (e.state === 'burst') {
       const k = e.burstT;
@@ -3553,6 +4045,8 @@ const HUD = {
       const clipTop = c => { c.beginPath(); c.moveTo(zz[0][0], zz[0][1]); for (const p of zz) c.lineTo(p[0], p[1]); c.lineTo(e.rx * 1.3, -e.ry * 1.3); c.lineTo(-e.rx * 1.3, -e.ry * 1.3); c.closePath(); };
       const clipBot = c => { c.beginPath(); c.moveTo(zz[0][0], zz[0][1]); for (const p of zz) c.lineTo(p[0], p[1]); c.lineTo(e.rx * 1.3, e.ry * 1.3); c.lineTo(-e.rx * 1.3, e.ry * 1.3); c.closePath(); };
       const fade = clamp(1 - (k - 1.1) / 0.6, 0, 1);
+      // Licht bricht aus dem Ei
+      if (k < 1.2) { const gs = e.rx * (1.6 + k * 2.5); ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = clamp(1 - k / 1.2, 0, 1) * 0.8; ctx.drawImage(softBlob('#ffd27a'), e.x - gs, e.groundY - cy - gs, gs * 2, gs * 2); ctx.restore(); }
       // untere Schale bleibt
       ctx.save(); ctx.globalAlpha = fade * e.alpha; ctx.translate(e.x, e.groundY - cy); clipBot(ctx); ctx.clip(); ctx.drawImage(e.tex, -e.tex.width / 2, -e.tex.height / 2); ctx.restore();
       // obere Kappe fliegt weg
@@ -3566,26 +4060,38 @@ const HUD = {
     const info = Game.hatchInfo, k = Game.phaseT;
     if (k < 0.15) return;
     const s = easeOutBack(clamp((k - 0.15) / 0.45, 0, 1));
-    const pal = PALETTES[info.rarity][info.palIdx % PALETTES[info.rarity].length];
     const R = RARITIES[info.rarity];
-    const sc = Math.min(0.75, 200 / SPECIES_H[info.species]) * s;
-    if (R.glow) { const gs = 200 * s; ctx.globalAlpha = 0.7; ctx.drawImage(softBlob(R.glow), info.x - gs, info.y - 110 - gs, gs * 2, gs * 2); ctx.globalAlpha = 1; }
-    Art.drawDino(ctx, info.species, info.x, info.y - Math.abs(Math.sin(k * 7)) * 30 * s, { pal, t, scale: sc, seed: info.seed, face: 1 });
+    const glow = R.aura || R.glow;
+    if (glow) { const gs = 210 * s; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.65; ctx.drawImage(softBlob(glow), info.x - gs, info.y - 120 - gs, gs * 2, gs * 2); ctx.restore(); }
+    const jump = Math.abs(Math.sin(k * 7)) * 30 * s;
+    if (DinoArt.has(info.species)) {
+      const size = 210 * s; if (size < 4) return;
+      const p = DinoArt.pose(info.species, t, 0, size);
+      DinoArt.draw(ctx, info.species, info.x, info.y - jump - p.bob, { size, rarity: info.rarity, palIdx: info.palIdx, face: 1, sx: p.sx, sy: p.sy });
+    } else {
+      const pal = PALETTES[info.rarity][info.palIdx % PALETTES[info.rarity].length];
+      const sc = Math.min(0.75, 200 / SPECIES_H[info.species]) * s;
+      Art.drawDino(ctx, info.species, info.x, info.y - jump, { pal, t, scale: sc, seed: info.seed, face: 1 });
+    }
   },
   drawBossShadow(ctx, t) {
     const [rx, ry] = EGG_SIZES.boss, x = Game.eggXs('boss')[0], gy = CONFIG.layout.groundY;
     const k = Game.phaseT / Game.introDur;
+    if (!this.bossTex || (!this.bossTex.isImg && Assets.has('egg_boss'))) this.bossTex = EggArt.texture({ rx, ry, base: '#57536a', pat: '#b46bff', pattern: 'spots', seed: 9, boss: true });
+    const tex = this.bossTex, dark = EggArt.tint(tex, '#1a0c2e'), rim = EggArt.tint(tex, '#d9a0ff');
     ctx.save(); ctx.translate(x, gy - ry * 0.95 + Math.sin(t * 2) * 6); ctx.scale(1 + Math.sin(t * 4) * 0.02, 1);
-    ctx.globalAlpha = 0.25 + k * 0.35; ctx.fillStyle = '#2a1650'; ctx.fill(EggArt.path(rx, ry));
-    ctx.lineWidth = 8; ctx.strokeStyle = `rgba(217,160,255,${0.4 + Math.sin(t * 5) * 0.3})`; ctx.stroke(EggArt.path(rx, ry));
+    ctx.globalAlpha = 0.35 + Math.sin(t * 5) * 0.25;
+    ctx.save(); ctx.scale(1.04, 1.03); ctx.drawImage(rim, -rim.width / 2, -rim.height / 2); ctx.restore();
+    ctx.globalAlpha = 0.35 + k * 0.4; ctx.drawImage(dark, -dark.width / 2, -dark.height / 2);
     ctx.restore();
   },
   drawCrater(ctx, xs) {
     const k = Game.phaseT - 0.9;
     for (const [x, rx] of xs) {
-      ctx.fillStyle = `rgba(60,40,40,${clamp(0.8 - k * 0.12, 0, 0.8)})`;
+      ctx.fillStyle = `rgba(20,12,10,${clamp(0.85 - k * 0.12, 0, 0.85)})`;
       ctx.beginPath(); ctx.ellipse(x, CONFIG.layout.groundY + 6, rx * 1.4, 34, 0, 0, TAU); ctx.fill();
-      if (Math.random() < 0.25) FX.spawn({ type: 'blob', layer: 1, x: x + rand(-rx, rx), y: CONFIG.layout.groundY, vx: rand(-10, 10), vy: rand(-50, -30), size: rand(16, 28), grow: 16, life: 2, color: '#8c8090', alpha: 0.5 });
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = clamp(0.7 - k * 0.15, 0, 0.7); ctx.drawImage(softBlob('#ff5a1a'), x - rx * 1.3, CONFIG.layout.groundY - 40, rx * 2.6, 90); ctx.restore();
+      if (Math.random() < 0.25) FX.spawn({ type: 'blob', layer: 1, x: x + rand(-rx, rx), y: CONFIG.layout.groundY, vx: rand(-10, 10), vy: rand(-50, -30), size: rand(16, 28), grow: 16, life: 2, color: '#6c6066', alpha: 0.5 });
     }
   },
 };
@@ -3809,6 +4315,7 @@ const Host = {
           setPath(CONFIG, cmd.path, v); saveSetting(cmd.path, v);
           if (cmd.path.startsWith('audio.')) Sound.applyVolumes();
           if (cmd.path.startsWith('names.')) Users.refilter();
+          if (cmd.path === 'assets.enabled') { HUD.lexDirty = true; HUD.cta.key = null; HUD.nests = {}; for (const e of Game.eggs) e.retex(); }
           return { msg: '' };
         }
         case 'resetSettings': Store.del(CONFIG.save.settingsKey); for (const k of Object.keys(CONFIG_DEFAULTS)) CONFIG[k] = JSON.parse(JSON.stringify(CONFIG_DEFAULTS[k])); Sound.applyVolumes(); Users.refilter(); return { msg: 'Einstellungen zurückgesetzt' };
@@ -3880,7 +4387,7 @@ const SETTINGS_UI = [
   ['Seltenheit (Gewichte)', [['rarity.weights.common', 'Gewöhnlich', 0, 100, 1], ['rarity.weights.rare', 'Selten', 0, 100, 1], ['rarity.weights.epic', 'Episch', 0, 100, 1], ['rarity.weights.legendary', 'Legendär', 0, 100, 1]]],
   ['Rotation', [['rotation.normalsBeforeSpecial', 'Normale vor Spezial', 0, 10, 1], ['rotation.bossAnnounceSec', 'Boss-Ansage (s)', 5, 60, 1], ['rotation.bossEnabled', 'Boss-Ei aktiv', 'bool'], ['rotation.duelEnabled', 'Ei-Duell aktiv', 'bool']]],
   ['Ton', [['audio.master', 'Gesamt', 0, 1, 0.05], ['audio.sfx', 'Effekte', 0, 1, 0.05], ['audio.music', 'Musik', 0, 1, 0.05], ['audio.musicEnabled', 'Eigenmusik an', 'bool']]],
-  ['Anzeige', [['infoBanner.everySec', 'Info-Banner alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool']]],
+  ['Anzeige', [['infoBanner.everySec', 'Info-Banner alle (s)', 15, 180, 5], ['dayNight.cycleSec', 'Tag-Nacht-Zyklus (s)', 120, 1800, 30], ['helpers.max', 'Max. Helfer-Dinos', 5, 30, 1], ['names.useNickname', 'Nickname statt @Name', 'bool'], ['avatars.enabled', 'Profilbilder anzeigen', 'bool'], ['assets.enabled', 'Bilder-Look (Höhle & 3D-Dinos)', 'bool']]],
   ['Action', [['missions.enabled', 'Mini-Missionen', 'bool'], ['missions.minGapSec', 'Mission frühestens alle (s)', 20, 300, 5], ['missions.maxGapSec', 'Mission spätestens alle (s)', 30, 400, 5], ['missions.rewardPct', 'Missions-Bonus (Anteil HP)', 0.05, 0.5, 0.01], ['missions.difficulty', 'Missions-Schwierigkeit', 0.4, 2, 0.05],
     ['hype.enabled', 'Hype-Leiste', 'bool'], ['hype.durationSec', 'Hype-Dauer (s)', 5, 30, 1], ['hype.multiplier', 'Hype-Schaden ×', 1, 4, 0.5], ['bubbles.enabled', 'Sprechblasen des Eis', 'bool'],
     ['miniEvents.minSec', 'Hintergrund-Ereignis ab (s)', 15, 300, 5], ['miniEvents.maxSec', '… bis (s)', 20, 400, 5]]],
@@ -3907,7 +4414,7 @@ const Panel = {
     h.push('<h2>Steuerung</h2><div class="btns">' +
       [['B', 'Boss-Ei als Nächstes'], ['D', 'Duell als Nächstes'], ['E', 'Zufallsereignis'], ['P', 'Pause-Screen'], ['M', 'Ton an/aus'], ['R', 'Ei neu starten'], ['N', '🎯 Mission starten'], ['X', '🔥 Hype starten']]
         .map(([k, l]) => `<button data-hot="${k}"><kbd>${k}</kbd>${l}</button>`).join('') + '</div>');
-    h.push('<div class="btns" style="margin-top:6px">' + [['rain', '🌧️ Regen'], ['shooting', '🌠 Sternschnuppe'], ['eruption', '🌋 Vulkan'], ['butterflies', '🦋 Schmetterlinge'], ['stumble', '🦕 Stolpern'], ['flyby', '🦅 Flugsaurier'], ['parade', '🏃 Herden-Parade'], ['fireflies', '✨ Glühwürmchen']].map(([k, l]) => `<button data-ev="${k}">${l}</button>`).join('') + '</div>');
+    h.push('<div class="btns" style="margin-top:6px">' + [['drips', '💧 Tropfen'], ['quake', '🪨 Beben'], ['eruption', '🌋 Lava-Ausbruch'], ['butterflies', '🦋 Falter'], ['stumble', '🦕 Stolpern'], ['flyby', '🦅 Flugsaurier'], ['parade', '🏃 Herden-Parade'], ['fireflies', '✨ Glühwürmchen']].map(([k, l]) => `<button data-ev="${k}">${l}</button>`).join('') + '</div>');
     if (!IS_PANEL) h.push('<div class="btns" style="margin-top:6px;grid-template-columns:1fr"><button data-act="window">↗️ Panel in eigenem Fenster öffnen (empfohlen im Stream)</button></div>');
     h.push('<pre id="pLog" class="hint" style="white-space:pre-wrap;min-height:1.2em;margin:6px 0 0"></pre>');
     h.push('<h2>Testmodus</h2><div class="hint" id="pTestInfo"></div>');
@@ -4090,6 +4597,12 @@ function boot() {
     setInterval(() => Panel.update(), 500);
     return;
   }
+  Assets.onLoad(k => {
+    if (k.startsWith('dino_')) HUD.lexDirty = true;                    // Lexikon zeigt jetzt die Dino-Bilder
+    if (k === 'rocks') HUD.nests = {};
+    if (k === 'meteor') HUD.meteorIcon = null;
+  });
+  Assets.load();
   StatsLog.init();
   TestSim.init();
   Sound.resume();          // OBS-Browserquelle erlaubt Autoplay → Ton sofort; normale Browser warten auf den ersten Klick
@@ -4114,7 +4627,7 @@ function boot() {
   Net.connect();
   setInterval(() => { Panel.update(); PanelLink.post({ kind: 'status', status: Host.status() }); }, 500);
   // Debug-Zugriff für Tests in der Konsole
-  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound };
+  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass };
   Loop.last = performance.now(); Loop.fpsAt = Loop.last;
   requestAnimationFrame(frame);
 }

@@ -57,7 +57,7 @@ process.on('uncaughtException', err => log('ERROR', 'Unerwarteter Fehler (Bridge
 process.on('unhandledRejection', err => log('ERROR', 'Unbehandeltes Promise (Bridge läuft weiter):', err));
 
 /* ---------------------- HTTP: Spiel ausliefern ------------------------- */
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
@@ -76,7 +76,8 @@ const server = http.createServer((req, res) => {
     if (!file.startsWith(CFG.gameDir + path.sep) && file !== CFG.gameDir) { res.writeHead(403); return res.end('Verboten'); }
     fs.readFile(file, (err, data) => {
       if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Nicht gefunden'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      const ext = path.extname(file).toLowerCase();
+      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': /^\.(jpe?g|webp|png)$/.test(ext) ? 'max-age=3600' : 'no-store' });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
   } catch (err) {
