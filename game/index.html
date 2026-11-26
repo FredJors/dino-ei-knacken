@@ -160,7 +160,8 @@ const CONFIG = {
   test: { viewers: 20, activity: 45 },
   game: 'monster',                      // Spiel: 'monster' (Monster füttern), 'race' (Farb-Rennen), 'egg' (Dino-Ei) – im Panel umschaltbar
   monster: {                            // MONSTER FÜTTERN
-    levelSec: 150,                        // Ziel: so lange dauert ein Level bei der aktuellen Aktivität
+    name: 'Pupi',                         // Name des Monsters (Texte & Ansagen)
+    levelSec: 100,                        // Ziel: so lange dauert ein Level bei der aktuellen Aktivität
     maxLevel: 10, minNeed: 12,            // ab Max-Level: Party → Chat wählt die Farbe des nächsten Baby-Monsters
     comment: 1, commentCooldownMs: 2000,  // Kommentar = Keks (pro Nutzer max. 1 / 2 s)
     namedBonus: 0.5, favMult: 2,          // Essen im Kommentar genannt = +0,5; Lieblingsessen des Tages = ×2
@@ -182,7 +183,7 @@ const CONFIG = {
     saveKey: 'dinoRennen.v1',
   },
   bots: {                               // Start-Bots: füllen auf, solange noch keine 20 echten Mitspieler da sind
-    enabled: true, fill: 20,              // Bots = fill − echte Mitspieler (jeder echte ersetzt nach und nach einen Bot)
+    enabled: false, fill: 20,             // AUS: sichtbare Bots können für TikTok nach unechter Aktivität aussehen. Bots = fill − echte Mitspieler (jeder echte ersetzt nach und nach einen Bot)
     activity: 55,                         // % – wie fleißig die Bots kommentieren (nur Kommentare, als „Bot …“ erkennbar)
     realWindowSec: 300,                   // „echter Mitspieler“ = hat in den letzten 5 min mitgemacht
   },
@@ -242,7 +243,9 @@ const FONTS = {
   serif: '"Bodoni MT", "Bodoni 72", Didot, Georgia, "Times New Roman", serif',
   body: '"Segoe UI Semibold", "Segoe UI", -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif',
 };
-const FONT_WEIGHT = { title: 400, serif: 700, body: 600 };
+FONTS.ui = '"SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Inter, Roboto, Arial, sans-serif';   // Apple-Look
+FONTS.uiHeavy = FONTS.ui;
+const FONT_WEIGHT = { title: 400, serif: 700, body: 600, ui: 600, uiHeavy: 800 };
 const fontStr = (size, f = 'body') => { const k = FONTS[f] ? f : 'body'; return `${FONT_WEIGHT[k]} ${size}px ${FONTS[k]}`; };
 const EMOJI_SPLIT = /(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}])*)/u;
 const EMOJI_TEST = /^\p{Extended_Pictographic}/u;
@@ -2635,7 +2638,7 @@ const Game = {
     if (this.callouts.length >= 3) this.callouts.shift();
     const e = this.eggs[0];
     const x = o.x != null ? o.x : (this.mode === 'duel' || !e ? CONFIG.layout.centerX : e.x);
-    this.callouts.push({ text, t: 0, life: o.life || 1.9, color: o.color || '#ffe14d', size: o.size || 76, x: clamp(x, 300, 700), y: o.y != null ? o.y : CONFIG.layout.groundY - 270 });
+    this.callouts.push({ text, font: o.font, t: 0, life: o.life || 1.9, color: o.color || '#ffe14d', size: o.size || 76, x: clamp(x, 300, 700), y: o.y != null ? o.y : CONFIG.layout.groundY - 270 });
   },
   likeHearts(n) {
     const k = Math.min(3, Math.ceil(n / 6));
@@ -2955,7 +2958,7 @@ const Hype = {
   start() {
     if (Game.phase !== 'play' || this.active > 0) return false;
     this.active = CONFIG.hype.durationSec; this.value = 1;
-    Game.callout(MONSTER_MODE ? 'FRESSRAUSCH! DOPPELT SATT!' : 'HYPE! DOPPELTER SCHADEN!', { color: '#ffb13d', size: 72, life: 2.6 });
+    Game.callout(MONSTER_MODE ? 'FRESSRAUSCH! DOPPELT SATT!' : 'HYPE! DOPPELTER SCHADEN!', { color: MONSTER_MODE ? '#ffffff' : '#ffb13d', font: MONSTER_MODE ? 'uiHeavy' : undefined, size: 72, life: 2.6 });
     Sound.hype(); Game.shake = Math.min(1, Game.shake + 0.4);
     for (const h of World.herd) h.jump(rand(0, 0.5));
     for (const h of Game.helpers) h.cheerT = 1.6;
@@ -3804,7 +3807,8 @@ const HUD = {
       const k = c.t / c.life, a = k > 0.75 ? 1 - (k - 0.75) / 0.25 : 1;
       const s = easeOutBack(clamp(c.t / 0.35, 0, 1)) * (1 + Math.sin(c.t * 10) * 0.02);
       ctx.save(); ctx.translate(c.x, c.y - 50 * easeOutCubic(k)); ctx.rotate(-0.03); ctx.scale(s, s);
-      drawText(ctx, c.text, 0, 0, { size: c.size, font: 'title', color: c.color, alpha: a, maxWidth: 820, strokeWidth: Math.max(10, c.size * 0.17), strokeColor: '#1c120c', extrude: 8 });
+      if (c.font === 'uiHeavy') drawText(ctx, c.text, 0, 0, { size: c.size, font: 'uiHeavy', color: c.color, alpha: a, maxWidth: 820, strokeWidth: Math.max(8, c.size * 0.14), strokeColor: 'rgba(20,40,30,0.55)', drop: false });
+      else drawText(ctx, c.text, 0, 0, { size: c.size, font: 'title', color: c.color, alpha: a, maxWidth: 820, strokeWidth: Math.max(10, c.size * 0.17), strokeColor: '#1c120c', extrude: 8 });
       ctx.restore();
     }
   },
@@ -5243,7 +5247,7 @@ function parseFood(text) {
 const MONSTER_LINES = {
   fed: ['Lecker!', 'Mehr!', 'Mmmh!', 'Nom nom nom!', 'Danke!', 'Jammi!'],
   fav: ['Meine Lieblingsspeise!!', 'JAAA, das liebe ich!'],
-  hungry: ['Ich hab Hunger …', 'Mein Bauch grummelt …', 'Hallo? Essen?', 'Tippt auf den Bildschirm – ich hab Hunger!'],
+  hungry: ['Ich hab Hunger …', 'Mein Bauch grummelt …', 'Hallo? Essen?', 'Huhu? Ist da wer?'],
   wake: ['Oh! Essen!', 'Huch, ich war eingeschlafen!'],
   level: ['Ich werde größer!', 'Ich wachse!', 'Mehr Platz bitte!'],
 };
@@ -5426,7 +5430,7 @@ const Monster = {
       if (this.sleeping) { this.sleeping = false; this.wowT = 1.0; this.say(pick(MONSTER_LINES.wake)); }
       if (gnow() - this.bigAt > 4) { this.bigMeal = 0; } this.bigAt = gnow(); this.bigMeal += f.xp;
       if (this.bigMeal >= M.burpAt || f.food === 'cake') { this.burpPending = true; this.bigMeal = 0; }
-      if (f.name && Game.pops.length < 8) { const [mx, my] = this.mouth(); Game.pops.push({ text: f.name, x: mx + rand(-110, 110), y: my - rand(40, 90), t: 0, life: 1.1, color: '#ffffff', size: f.xp >= 5 ? 40 : 30, font: 'body' }); }
+      if (f.name && Game.pops.length < 8) { const [mx, my] = this.mouth(); Game.pops.push({ text: f.name, x: mx + rand(-110, 110), y: my - rand(40, 90), t: 0, life: 1.1, color: '#ffffff', size: f.xp >= 5 ? 40 : 30, font: 'uiHeavy' }); }
       if (Math.random() < 0.04 && now() - this.bubbleAt > 7) this.say(pick(MONSTER_LINES.fed));
     }
     this.chewT = Math.min(1.4, Math.max(this.chewT, 0.5) + 0.12); this.bite = 1;
@@ -5444,14 +5448,14 @@ const Monster = {
   startParty() {
     if (this.party > 0 || this.vote) return;
     this.party = 8; this.xp = this.need;
-    Game.callout('RIESEN-MONSTER!', { color: '#9cf08a', x: CONFIG.layout.centerX, y: 640, size: 92, life: 2.8 });
+    Game.callout(`${(CONFIG.monster.name || 'Monster').toUpperCase()} IST RIESIG!`, { color: '#ffffff', font: 'uiHeavy', x: CONFIG.layout.centerX, y: 640, size: 88, life: 2.8 });
     Sound.hatch('legendary'); Game.flash = 0.6; Game.flashColor = '#e8ffd8'; Game.shake = Math.min(1, Game.shake + 0.6);
     Game.toast('Danke an alle Fütterer!', { icon: '🎉', prio: 3, life: 3.5, color: '#9cf08a' });
     StatsLog.event('monster', { no: this.no, level: this.level, active: Users.activeCount() });
   },
   startVote() {
     this.vote = { t: 0, dur: CONFIG.monster.voteSec, counts: [0, 0, 0, 0, 0, 0], voters: new Map() };
-    Game.callout('Wählt die Farbe!', { color: '#ffd35c', x: CONFIG.layout.centerX, y: 640, size: 70, life: 2.2 });
+    Game.callout('Welche Farbe kommt als Nächstes?', { color: '#ffffff', font: 'uiHeavy', x: CONFIG.layout.centerX, y: 600, size: 58, life: 2.2 });
     Sound.announce('duel');
   },
   endVote() {
@@ -5467,7 +5471,7 @@ const Monster = {
     this.cur = new Map(); this.boardDirty = true; this.party = 0; this.lvl = null;
     this.dispH = this.toH = this.targetH(1); this.hatchT = 0; this.wowT = 1.4; this.hunger = 0.8; this.lastFeedAt = gnow();
     const C = RACE_COLORS.find(c => c.key === key) || RACE_COLORS[2];
-    Game.callout(`Baby-Monster in ${C.name}!`, { color: C.light, x: CONFIG.layout.centerX, y: 700, size: 70, life: 2.6 });
+    Game.callout(`Baby-Monster in ${C.name}!`, { color: '#ffffff', font: 'uiHeavy', x: CONFIG.layout.centerX, y: 700, size: 70, life: 2.6 });
     Sound.hatch('epic'); Game.flash = 0.5; Game.flashColor = C.light;
     for (let i = 0; i < 70; i++) FX.spawn({ type: 'confetti', layer: 2, x: this.X + rand(-60, 60), y: this.GY - 160, vx: rand(-520, 520), vy: rand(-1000, -400), g: 900, drag: 1.2, size: rand(6, 11), rot: rand(0, TAU), vr: rand(-8, 8), life: rand(1.8, 2.6), color: pick([C.col, C.light, '#ffffff']), important: true });
     this.save();
@@ -5502,7 +5506,7 @@ const Monster = {
           this.xp = Math.max(0, this.xp - this.need); this.level++; this.best = Math.max(this.best, this.level);
           this.need = this.targetNeed(); this.fromH = this.dispH; this.toH = this.targetH(this.level); this.growT = 0;
           L.phase = 'grow'; L.t = 0;
-          Game.callout(`LEVEL ${this.level}!`, { color: '#9cf08a', x: CONFIG.layout.centerX, y: Math.max(600, this.GY - this.toH - 40), size: 86, life: 2.0 });
+          Game.callout(`LEVEL ${this.level}!`, { color: '#ffffff', font: 'uiHeavy', x: CONFIG.layout.centerX, y: Math.max(600, this.GY - this.toH - 40), size: 86, life: 2.0 });
           Sound.hatch('epic'); Game.flash = 0.45; Game.flashColor = '#efffe0'; Game.shake = Math.min(1, Game.shake + 0.5);
           if (Math.random() < 0.6) this.say(pick(MONSTER_LINES.level));
         } else if (L.phase === 'grow' && L.t >= 1.15) {
@@ -5627,10 +5631,68 @@ const MonsterAmbient = {
   },
 };
 
+/* ---------- Apple-„Liquid Glass“: Milchglas (verschwommener Hintergrund), Lichtkante, weicher Schatten ---------- */
+const LiquidGlass = {
+  P: 40, cache: new Map(), blurSrc: null, blurImg: null,
+  INK: '#1d1d1f', SUB: 'rgba(60,60,67,0.72)', GREEN: '#34c759', ORANGE: '#ff9500', PINK: '#ff2d55', GOLD: '#ffcc00',
+  /* Hintergrund einmal weichzeichnen (Canvas-Filter, sonst klein- und wieder großrechnen) */
+  blurred(img) {
+    if (this.blurSrc === img && this.blurImg) return this.blurImg;
+    const c = Mat.cv(1080, 1920), g = c.getContext('2d');
+    if (typeof g.filter === 'string') { g.filter = 'blur(28px) saturate(1.45)'; g.drawImage(img, -70, -70, 1220, 2060); g.filter = 'none'; }
+    else {
+      const s = Mat.cv(90, 160), sg = s.getContext('2d'); sg.imageSmoothingQuality = 'high'; sg.drawImage(img, 0, 0, 90, 160);
+      const m = Mat.cv(270, 480), mg = m.getContext('2d'); mg.imageSmoothingQuality = 'high'; mg.drawImage(s, 0, 0, 270, 480);
+      g.imageSmoothingQuality = 'high'; g.drawImage(m, 0, 0, 1080, 1920);
+    }
+    this.blurSrc = img; this.blurImg = c; this.cache.clear();
+    return c;
+  },
+  panel(x, y, w, h, r, o = {}) {
+    const bg = Assets.get(o.bgKey || 'bgMonster');
+    const key = [x, y, w, h, r, o.tint || '', bg ? 1 : 0].join('|');
+    let c = this.cache.get(key); if (c) return c;
+    const P = this.P; c = Mat.cv(w + P * 2, h + P * 2); const g = c.getContext('2d');
+    const path = (ins = 0) => { g.beginPath(); rr(g, P + ins, P + ins, w - ins * 2, h - ins * 2, Math.max(2, r - ins)); };
+    g.save(); g.shadowColor = 'rgba(25,35,70,0.24)'; g.shadowBlur = 34; g.shadowOffsetY = 12; path(); g.fillStyle = '#eef2f6'; g.fill(); g.restore();
+    g.save(); path(); g.clip();
+    if (bg) g.drawImage(this.blurred(bg), P - x, P - y); else { g.fillStyle = '#e4ecf4'; g.fillRect(P, P, w, h); }
+    g.fillStyle = o.tint || 'rgba(255,255,255,0.36)'; g.fillRect(P, P, w, h);
+    const sheen = g.createLinearGradient(0, P, 0, P + h); sheen.addColorStop(0, 'rgba(255,255,255,0.30)'); sheen.addColorStop(0.5, 'rgba(255,255,255,0.02)'); sheen.addColorStop(1, 'rgba(255,255,255,0.14)');
+    g.fillStyle = sheen; g.fillRect(P, P, w, h);
+    const spec = g.createRadialGradient(P + w * 0.16, P, 0, P + w * 0.16, P, Math.max(w, h) * 0.6); spec.addColorStop(0, 'rgba(255,255,255,0.38)'); spec.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = spec; g.fillRect(P, P, w, h);
+    const rim = g.createLinearGradient(0, P, 0, P + h); rim.addColorStop(0, 'rgba(255,255,255,0.65)'); rim.addColorStop(0.5, 'rgba(255,255,255,0.10)'); rim.addColorStop(1, 'rgba(255,255,255,0.40)');
+    g.lineWidth = 12; g.strokeStyle = rim; path(); g.stroke();
+    g.restore();
+    const edge = g.createLinearGradient(P, P, P + w, P + h); edge.addColorStop(0, 'rgba(255,255,255,0.98)'); edge.addColorStop(0.5, 'rgba(255,255,255,0.35)'); edge.addColorStop(1, 'rgba(255,255,255,0.8)');
+    g.lineWidth = 1.8; g.strokeStyle = edge; path(0.9); g.stroke();
+    if (this.cache.size > 90) this.cache.delete(this.cache.keys().next().value);
+    this.cache.set(key, c); return c;
+  },
+  draw(ctx, x, y, w, h, r, o) { x = Math.round(x); y = Math.round(y); ctx.drawImage(this.panel(x, y, Math.round(w), Math.round(h), r, o), x - this.P, y - this.P); },
+  /* Fortschritt wie bei iOS: dünne Kapsel, satte Füllung, wandernder Glanz */
+  bar(ctx, x, y, w, h, p, c1, c2, t) {
+    ctx.save();
+    ctx.beginPath(); rr(ctx, x, y, w, h, h / 2); ctx.fillStyle = 'rgba(118,118,128,0.20)'; ctx.fill();
+    if (p > 0.002) {
+      ctx.beginPath(); rr(ctx, x, y, w, h, h / 2); ctx.clip();
+      const fw = Math.max(h, w * clamp(p, 0, 1)), gr = ctx.createLinearGradient(x, 0, x + fw, 0); gr.addColorStop(0, c1); gr.addColorStop(1, c2);
+      ctx.fillStyle = gr; ctx.beginPath(); rr(ctx, x, y, fw, h, h / 2); ctx.fill();
+      const wx = x + ((t * 220) % (fw + 160)) - 80, wg = ctx.createLinearGradient(wx - 60, 0, wx + 60, 0);
+      wg.addColorStop(0, 'rgba(255,255,255,0)'); wg.addColorStop(0.5, 'rgba(255,255,255,0.45)'); wg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = wg; ctx.fillRect(x, y, fw, h);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(x + h / 2, y + h * 0.16, Math.max(0, fw - h), h * 0.22);
+    }
+    ctx.restore();
+  },
+  text(ctx, txt, x, y, o) { return drawText(ctx, txt, x, y, Object.assign({ font: 'ui', color: this.INK, stroke: false }, o)); },
+};
+
 /* ---------- Zeichnen ---------- */
 const MonsterView = {
-  ctaImg: null, ctaKey: '', howImg: null, howKey: '',
-  L: { cta: [30, 142, 900, 84], status: [30, 240, 900, 86], how: [30, 340, 440, 246], board: [490, 340, 450, 270] },
+  ctaImg: null, ctaKey: '', howImg: null, howKey: '', toastCache: new Map(),
+  L: { cta: [30, 142, 900, 84], status: [30, 240, 900, 88], how: [30, 344, 440, 246], board: [490, 344, 450, 270], rush: [36, 700, 56, 290] },
   draw(ctx, t) {
     const M = Monster, sh = Game.shake * Game.shake * 20;
     ctx.save(); if (sh > 0.3) ctx.translate(rand(-sh, sh), rand(-sh, sh));
@@ -5639,7 +5701,6 @@ const MonsterView = {
     else { const g = ctx.createLinearGradient(0, 0, 0, 1920); g.addColorStop(0, '#9fc8ff'); g.addColorStop(0.45, '#ffd0ea'); g.addColorStop(0.5, '#8fd468'); g.addColorStop(1, '#3f8a3a'); ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1920); }
     MonsterAmbient.draw(ctx);
     FX.draw(ctx, 0);
-    // Fressrausch: warmes Leuchten hinter dem Monster
     if (Hype.active > 0) { const gs = M.dispH * 1.2; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.35 + Math.sin(t * 10) * 0.12; ctx.drawImage(softBlob('#ffb13d'), M.X - gs, M.GY - M.dispH * 0.5 - gs, gs * 2, gs * 2); ctx.restore(); }
     this.drawMonster(ctx, t);
     this.drawFoods(ctx);
@@ -5653,11 +5714,11 @@ const MonsterView = {
     this.drawStatus(ctx, t);
     this.drawHow(ctx);
     this.drawBoard(ctx, t);
-    HUD.drawHype(ctx, t);
+    this.drawRush(ctx, t);
     this.drawBubble(ctx, t);
     HUD.drawCallouts(ctx);
     this.drawVote(ctx, t);
-    HUD.drawToasts(ctx);
+    this.drawToasts(ctx);
     HUD.drawPause(ctx, t);
     HUD.drawHints(ctx, t);
   },
@@ -5696,60 +5757,62 @@ const MonsterView = {
       ctx.restore();
     }
   },
-  /* ---------- Aufruf ---------- */
+  /* ---------- Kopfzeile: neutrale Frage statt Like-Aufforderung ---------- */
   drawCTA(ctx, t) {
-    const [x, y, w, h] = this.L.cta, key = 'm' + Assets.loaded;
+    const [x, y, w, h] = this.L.cta, LG = LiquidGlass, name = CONFIG.monster.name || 'das Monster', key = name + Assets.loaded;
     if (this.ctaKey !== key) {
-      this.ctaKey = key; const P = Glass.P, c = Mat.cv(w + P * 2, h + P * 2), g = c.getContext('2d');
-      g.drawImage(Glass.panel(w, h, h / 2, { border: 'rgba(255,190,110,0.55)', tint: 'rgba(255,140,40,0.06)' }), 0, 0);
-      const text = 'Like & kommentiere – füttere das Monster!';
-      let size = 46; while (size > 34 && measureText(g, text, size, 'title') > w - 170) size -= 2;
-      const tw = measureText(g, text, size, 'title'), cy = P + h / 2, x0 = P + w / 2 - tw / 2 + 34;
-      const im = MonsterArt.food('burger', 56); if (im) g.drawImage(im, x0 - 70, cy - im.height / 2);
-      drawText(g, text, x0, cy + 6, { size, font: 'title', align: 'left', color: 'rgba(0,0,0,0.5)', stroke: false });
-      const gr = g.createLinearGradient(0, -size * 0.5, 0, size * 0.5); gr.addColorStop(0, '#fff6df'); gr.addColorStop(1, '#ffc25a');
-      drawText(g, text, x0, cy + 2, { size, font: 'title', align: 'left', color: gr, stroke: false });
+      this.ctaKey = key; const P = LG.P, c = Mat.cv(w + P * 2, h + P * 2), g = c.getContext('2d');
+      g.drawImage(LG.panel(x, y, w, h, h / 2), 0, 0); g.translate(P, P);
+      const text = `Was soll ${name} heute essen?`;
+      let size = 42; while (size > 30 && measureText(g, text, size, 'uiHeavy') > w - 220) size -= 2;
+      const tw = measureText(g, text, size, 'uiHeavy'), x0 = w / 2 - tw / 2 + 52;
+      ['pizza', 'donut', 'burger'].forEach((f, i) => { const im = MonsterArt.food(f, 48); if (im) g.drawImage(im, x0 - 156 + i * 40 - im.width / 2, h / 2 - im.height / 2); });
+      LG.text(g, text, x0, h / 2 + 2, { size, font: 'uiHeavy', align: 'left' });
       this.ctaImg = c;
     }
-    const s = 1 + Math.sin(t * 2.2) * 0.006;
-    ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.scale(s, s); ctx.drawImage(this.ctaImg, -w / 2 - Glass.P, -h / 2 - Glass.P); ctx.restore();
+    ctx.drawImage(this.ctaImg, x - LG.P, y - LG.P);
   },
-  /* ---------- Level + Wachstum ---------- */
+  /* ---------- Level, Wachstum, Monster-Nummer ---------- */
   drawStatus(ctx, t) {
-    const [x, y, w, h] = this.L.status, M = Monster, maxL = CONFIG.monster.maxLevel;
-    Glass.draw(ctx, x, y, w, h, 28);
-    Glass.title(ctx, 'LEVEL', x + 30, y + 26, 20, '#9cf08a', 'left');
-    HUD.text(ctx, `${M.level}`, x + 30, y + 58, { size: 46, font: 'title', align: 'left', color: '#ffd35c' });
-    drawText(ctx, `/ ${maxL}`, x + 30 + measureText(ctx, String(M.level), 46, 'title') + 10, y + 62, { size: 26, font: 'title', align: 'left', color: 'rgba(255,240,215,0.6)', stroke: false });
-    ctx.fillStyle = 'rgba(255,238,215,0.16)'; ctx.fillRect(x + 150, y + 16, 1.5, h - 32);
+    const [x, y, w, h] = this.L.status, M = Monster, LG = LiquidGlass, maxL = CONFIG.monster.maxLevel;
+    LG.draw(ctx, x, y, w, h, 30);
+    const cx = x + 50, cy = y + h / 2, rg = ctx.createLinearGradient(0, cy - 30, 0, cy + 30); rg.addColorStop(0, '#5ee07a'); rg.addColorStop(1, '#22a447');
+    ctx.save(); ctx.shadowColor = 'rgba(30,140,60,0.45)'; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(cx, cy, 30, 0, TAU); ctx.fillStyle = rg; ctx.fill(); ctx.restore();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.beginPath(); ctx.arc(cx, cy, 30, 0, TAU); ctx.stroke();
+    LG.text(ctx, String(M.level), cx, cy + 2, { size: 32, font: 'uiHeavy', color: '#ffffff' });
+    LG.text(ctx, 'LEVEL', x + 96, y + 30, { size: 17, align: 'left', color: LG.SUB });
+    LG.text(ctx, `${M.level} von ${maxL}`, x + 96, y + 58, { size: 25, font: 'uiHeavy', align: 'left' });
     const big = M.party > 0 || M.vote || (M.level >= maxL && M.xp >= M.need);
-    const p = big ? 1 : clamp(M.xp / Math.max(1, M.need), 0, 1), bx = x + 176, bw = w - 176 - 150;
-    const cols = Hype.active > 0 ? ['#fff07a', '#ff7a1f'] : ['#c8ff7a', '#36c25a'];
-    Glass.bar(ctx, bx, y + 20, bw, 46, p, cols[0], cols[1], t, { edgeColor: '#e0ffb0' });
-    HUD.text(ctx, big ? 'RIESIG!' : `Wachstum ${Math.floor(p * 100)} %`, bx + bw / 2, y + h / 2 + 2, { size: 32, font: 'title' });
-    Glass.title(ctx, 'MONSTER', x + w - 74, y + 30, 18, '#f2c14e');
-    HUD.text(ctx, `#${M.no}`, x + w - 74, y + 60, { size: 32, font: 'title', color: '#fff3d6' });
+    const p = big ? 1 : clamp(M.xp / Math.max(1, M.need), 0, 1), bx = x + 236, bw = w - 236 - 150;
+    LG.text(ctx, big ? `${(CONFIG.monster.name || 'Monster').toUpperCase()} IST RIESIG!` : Hype.active > 0 ? 'Fressrausch – doppelt satt!' : 'Wachstum', bx, y + 30, { size: 19, align: 'left', color: Hype.active > 0 ? '#c25e00' : LG.SUB });
+    LG.text(ctx, `${Math.floor(p * 100)} %`, bx + bw, y + 30, { size: 19, font: 'uiHeavy', align: 'right' });
+    const cols = Hype.active > 0 ? ['#ffcc00', '#ff6a00'] : ['#7ee08f', '#28b44a'];
+    LG.bar(ctx, bx, y + 46, bw, 24, p, cols[0], cols[1], t);
+    ctx.fillStyle = 'rgba(60,60,67,0.18)'; ctx.fillRect(x + w - 128, y + 18, 1.2, h - 36);
+    LG.text(ctx, 'MONSTER', x + w - 64, y + 30, { size: 16, color: LG.SUB });
+    LG.text(ctx, `#${M.no}`, x + w - 64, y + 58, { size: 28, font: 'uiHeavy' });
   },
-  /* ---------- So geht's (immer sichtbar) ---------- */
+  /* ---------- So geht's (beschreibend, ohne Aufforderung) ---------- */
   drawHow(ctx) {
-    const [x, y, w, h] = this.L.how, M = Monster, key = M.fav.key + Assets.loaded;
+    const [x, y, w, h] = this.L.how, M = Monster, LG = LiquidGlass, key = M.fav.key + Assets.loaded + (CONFIG.monster.name || '');
     if (this.howKey !== key) {
-      this.howKey = key; const P = Glass.P, c = Mat.cv(w + P * 2, h + P * 2), g = c.getContext('2d');
-      g.drawImage(Glass.panel(w, h, 26), 0, 0); g.translate(P, P);
-      Glass.title(g, "SO GEHT'S", 26, 32, 27, '#f2c14e', 'left');
-      const row = (food, label, yy) => { const im = MonsterArt.food(food, 40); if (im) g.drawImage(im, 44 - im.width / 2, yy - im.height / 2); drawText(g, label, 76, yy + 1, { size: 27, align: 'left', color: HUD.TXT, stroke: false, maxWidth: w - 96 }); };
-      row('candy', 'Likes = Snacks', 72);
-      row('cookie', 'Kommentar = Keks', 108);
-      drawText(g, '(Essen nennen: pizza, eis, donut …)', 76, 138, { size: 21, align: 'left', color: HUD.SOFT, stroke: false, maxWidth: w - 96 });
-      row('burger', 'Follow = Burger · Teilen = Pizza', 172);
-      const F = FOODS[M.fav.key]; g.beginPath(); rr(g, 16, 196, w - 32, 40, 20); g.fillStyle = 'rgba(255,211,92,0.16)'; g.fill();
-      const fi = MonsterArt.food(M.fav.key, 34); if (fi) g.drawImage(fi, 44 - fi.width / 2, 216 - fi.height / 2);
-      drawText(g, `Lieblingsessen heute: ${F.name} ×${CONFIG.monster.favMult}`, 72, 217, { size: 23, align: 'left', color: '#ffd35c', stroke: false, maxWidth: w - 90 });
+      this.howKey = key; const P = LG.P, c = Mat.cv(w + P * 2, h + P * 2), g = c.getContext('2d');
+      g.drawImage(LG.panel(x, y, w, h, 28), 0, 0); g.translate(P, P);
+      LG.text(g, "So geht's", 24, 33, { size: 25, font: 'uiHeavy', align: 'left' });
+      const row = (food, label, yy) => { const im = MonsterArt.food(food, 38); if (im) g.drawImage(im, 42 - im.width / 2, yy - im.height / 2); LG.text(g, label, 72, yy + 1, { size: 23, align: 'left', maxWidth: w - 90 }); };
+      row('candy', 'Likes → Snacks', 72);
+      row('cookie', 'Kommentar → Keks', 108);
+      LG.text(g, 'Wer ein Essen nennt, wirft genau das 🍕', 72, 136, { size: 19, align: 'left', color: LG.SUB, maxWidth: w - 90 });
+      row('burger', 'Follow → Burger · Teilen → Pizza', 170);
+      const F = FOODS[M.fav.key];
+      g.beginPath(); rr(g, 14, 194, w - 28, 40, 20); g.fillStyle = 'rgba(255,149,0,0.16)'; g.fill();
+      const fi = MonsterArt.food(M.fav.key, 32); if (fi) g.drawImage(fi, 40 - fi.width / 2, 214 - fi.height / 2);
+      LG.text(g, `Heute Lieblingsessen: ${F.name} ×${CONFIG.monster.favMult}`, 66, 215, { size: 20, font: 'uiHeavy', align: 'left', color: '#b35a00', maxWidth: w - 84 });
       this.howImg = c;
     }
-    ctx.drawImage(this.howImg, x - Glass.P, y - Glass.P);
+    ctx.drawImage(this.howImg, x - LG.P, y - LG.P);
   },
-  /* ---------- TOP FEEDERS (dieses Monster / heute / gesamt) ---------- */
+  /* ---------- Top Feeders mit iOS-Segmentschalter ---------- */
   drawBoard(ctx, t) {
     const M = Monster, kinds = ['cur', 'today', 'all'];
     if (t > M.boardSwitchAt) { M.boardKind = (M.boardKind + 1) % 3; M.boardSwitchAt = t + CONFIG.leaderboard.rotateSec; M.boardDirty = true; }
@@ -5758,66 +5821,112 @@ const MonsterView = {
       M.boardDirty = false; M.boardAt = t;
       const src = kind === 'cur' ? [...M.cur.entries()] : Object.entries(kind === 'today' ? M.fans.today : M.fans.all);
       const rows = src.filter(([id]) => !Persist.isMuted(id)).sort((a, b) => b[1].p - a[1].p).slice(0, 5).map(([id, v]) => ({ id, n: v.n, p: v.p }));
-      const sig = kind + rows.map(r => { const u = Users.map.get(r.id); return r.n + Math.round(r.p) + (u && Avatars.get(u) ? '*' : ''); }).join('|');
+      const sig = kind + Assets.loaded + rows.map(r => { const u = Users.map.get(r.id); return r.n + Math.round(r.p) + (u && Avatars.get(u) ? '*' : ''); }).join('|');
       if (sig !== M.boardSig) { M.boardSig = sig; M.boardImg = this.renderBoard(kind, rows); }
     }
     const [x, y] = this.L.board;
-    ctx.drawImage(M.boardImg, x - Glass.P, y - Glass.P);
+    ctx.drawImage(M.boardImg, x - LiquidGlass.P, y - LiquidGlass.P);
   },
   renderBoard(kind, rows) {
-    const [, , W, H] = this.L.board, P = Glass.P, c = Mat.cv(W + P * 2, H + P * 2), g = c.getContext('2d');
-    g.drawImage(Glass.panel(W, H, 26), 0, 0); g.translate(P, P);
-    Glass.title(g, 'TOP FEEDERS', 24, 33, 30, '#f3e6cf', 'left');
-    const label = { cur: 'dieses Monster', today: 'heute', all: 'gesamt' }[kind], lw = measureText(g, label, 20) + 26;
-    g.beginPath(); rr(g, W - 20 - lw, 18, lw, 30, 15); g.fillStyle = 'rgba(156,240,138,0.9)'; g.fill();
-    drawText(g, label, W - 20 - lw / 2, 34, { size: 20, color: '#14301a', stroke: false });
-    g.fillStyle = 'rgba(255,238,215,0.16)'; g.fillRect(20, 60, W - 40, 1.5);
-    if (!rows.length) { drawText(g, 'Noch niemand –', W / 2, 140, { size: 30, color: HUD.TXT, stroke: false }); drawText(g, 'füttere das Monster!', W / 2, 182, { size: 30, color: '#ffd35c', stroke: false }); return c; }
-    const RANK = ['#f2c14e', '#dfe3e8', '#e3985a', '#b9ab9b', '#b9ab9b'];
+    const [x, y, W, H] = this.L.board, LG = LiquidGlass, P = LG.P, c = Mat.cv(W + P * 2, H + P * 2), g = c.getContext('2d');
+    g.drawImage(LG.panel(x, y, W, H, 28), 0, 0); g.translate(P, P);
+    LG.text(g, 'Top Feeders', 22, 34, { size: 27, font: 'uiHeavy', align: 'left' });
+    const segs = [['cur', 'Monster'], ['today', 'Heute'], ['all', 'Gesamt']], sw = 74, sx0 = W - 20 - sw * 3;
+    g.beginPath(); rr(g, sx0 - 3, 18, sw * 3 + 6, 32, 16); g.fillStyle = 'rgba(118,118,128,0.18)'; g.fill();
+    segs.forEach(([k, l], i) => {
+      const on = k === kind, sx = sx0 + i * sw;
+      if (on) { g.save(); g.shadowColor = 'rgba(0,0,0,0.16)'; g.shadowBlur = 6; g.shadowOffsetY = 2; g.beginPath(); rr(g, sx, 20, sw, 28, 14); g.fillStyle = '#ffffff'; g.fill(); g.restore(); }
+      LG.text(g, l, sx + sw / 2, 35, { size: 16, font: on ? 'uiHeavy' : 'ui', color: on ? LG.INK : LG.SUB });
+    });
+    if (!rows.length) { LG.text(g, 'Noch niemand dabei', W / 2, 140, { size: 26, font: 'uiHeavy' }); LG.text(g, `${CONFIG.monster.name || 'Das Monster'} wartet auf Futter`, W / 2, 178, { size: 22, color: LG.SUB }); return c; }
+    const MED = ['#ffcc00', '#c7c7cc', '#d9975a'];
     rows.forEach((r, i) => {
-      const cy = 90 + i * 40, u = Users.map.get(r.id) || { id: r.id, name: r.n, hue: hashStr(String(r.id)) % 360 };
-      if (i === 0) { const hg = g.createLinearGradient(0, 0, W, 0); hg.addColorStop(0, 'rgba(242,193,78,0.2)'); hg.addColorStop(1, 'rgba(242,193,78,0)'); g.fillStyle = hg; g.beginPath(); rr(g, 10, cy - 19, W - 20, 38, 14); g.fill(); }
-      drawText(g, (i + 1) + '.', 34, cy + 1, { size: 26, font: 'serif', color: RANK[i], stroke: false });
-      Avatars.draw(g, u, 76, cy, 17, RANK[i]);
-      drawText(g, r.n, 104, cy + 1, { size: 26, align: 'left', color: '#f7efe4', stroke: false, maxWidth: W - 104 - 86 });
-      drawText(g, fmtPts(r.p), W - 22, cy + 1, { size: 25, align: 'right', color: i === 0 ? '#ffd35c' : HUD.SOFT, stroke: false });
+      const cy = 86 + i * 39, u = Users.map.get(r.id) || { id: r.id, name: r.n, hue: hashStr(String(r.id)) % 360 };
+      if (i === 0) { g.beginPath(); rr(g, 10, cy - 19, W - 20, 38, 19); g.fillStyle = 'rgba(255,204,0,0.18)'; g.fill(); }
+      if (i < 3) { g.beginPath(); g.arc(32, cy, 13, 0, TAU); g.fillStyle = MED[i]; g.fill(); LG.text(g, String(i + 1), 32, cy + 1, { size: 16, font: 'uiHeavy', color: i === 0 ? '#5a4400' : '#ffffff' }); }
+      else LG.text(g, String(i + 1), 32, cy + 1, { size: 18, font: 'uiHeavy', color: LG.SUB });
+      Avatars.draw(g, u, 70, cy, 16, 'rgba(255,255,255,0.9)');
+      LG.text(g, r.n, 96, cy + 1, { size: 23, align: 'left', maxWidth: W - 96 - 80 });
+      LG.text(g, fmtPts(r.p), W - 22, cy + 1, { size: 22, font: 'uiHeavy', align: 'right', color: i === 0 ? '#b37f00' : LG.INK });
+      if (i < rows.length - 1 && i > 0) { g.fillStyle = 'rgba(60,60,67,0.14)'; g.fillRect(96, cy + 19, W - 116, 1); }
     });
     return c;
   },
-  /* ---------- Sprechblase am Kopf ---------- */
+  /* ---------- Fressrausch-Säule (Glas-Kapsel) ---------- */
+  drawRush(ctx, t) {
+    if (!CONFIG.hype.enabled) return;
+    const [x, y0, w, h] = this.L.rush, LG = LiquidGlass, on = Hype.active > 0;
+    if (on) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.45 + Math.sin(t * 12) * 0.2; ctx.drawImage(softBlob('#ff9500'), x - 60, y0 - 50, w + 120, h + 100); ctx.restore(); }
+    LG.draw(ctx, x, y0, w, h, w / 2);
+    const gx = x + 10, gy = y0 + 10, gw = w - 20, gh = h - 20, fh = gh * clamp(Hype.value, 0, 1);
+    ctx.beginPath(); rr(ctx, gx, gy, gw, gh, gw / 2); ctx.fillStyle = 'rgba(118,118,128,0.22)'; ctx.fill();
+    if (fh > 1) {
+      ctx.save(); ctx.beginPath(); rr(ctx, gx, gy, gw, gh, gw / 2); ctx.clip();
+      const g = ctx.createLinearGradient(0, gy + gh, 0, gy); g.addColorStop(0, '#ffcc00'); g.addColorStop(0.6, '#ff9500'); g.addColorStop(1, '#ff2d55');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(gx, gy + gh);
+      for (let xx = 0; xx <= gw; xx += 4) ctx.lineTo(gx + xx, gy + gh - fh + Math.sin(xx * 0.3 + t * 7) * 3);
+      ctx.lineTo(gx + gw, gy + gh); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(gx + 5, gy + gh - fh + 6, 5, Math.max(0, fh - 14));
+      ctx.restore();
+    }
+    Icon.draw(ctx, 'flame', x + w / 2, y0 - 30, 52 + (on ? Math.sin(t * 14) * 6 : 0), t);
+    if (on) LG.text(ctx, '×2', x + w / 2 + 4, y0 + h + 32, { size: 38, font: 'uiHeavy', color: '#ffffff', stroke: true, strokeWidth: 6, strokeColor: 'rgba(160,60,0,0.6)', drop: false });
+  },
+  /* ---------- Sprechblase (iMessage-artig) ---------- */
   drawBubble(ctx, t) {
     const b = Monster.bubble; if (!b) return;
-    const M = Monster, a = clamp((b.life - b.t) / 0.3, 0, 1), s = easeOutBack(clamp(b.t / 0.3, 0, 1));
-    const size = 31, lines = wrapText(ctx, b.text, size, 300), w = Math.min(350, Math.max(...lines.map(l => measureText(ctx, l, size))) + 48), h = lines.length * 38 + 30;
+    const M = Monster, LG = LiquidGlass, a = clamp((b.life - b.t) / 0.3, 0, 1), s = easeOutBack(clamp(b.t / 0.3, 0, 1));
+    const size = 29, lines = wrapText(ctx, b.text, size, 300, 'ui'), w = Math.min(350, Math.max(...lines.map(l => measureText(ctx, l, size, 'ui'))) + 46), h = lines.length * 36 + 28;
     const headX = M.X + M.dispH * 0.36, headY = M.GY - M.hop - M.dispH * 0.86;
     const bx = clamp(headX + w / 2 + 10, 40 + w / 2, 940 - w / 2), by = clamp(headY - h / 2, 640 + h / 2, 1150);
     ctx.save(); ctx.globalAlpha = a; ctx.translate(bx, by); ctx.scale(s, s);
     const tipX = clamp(M.X + M.dispH * 0.2 - bx, -w / 2 - 30, w / 2 - 20), ax = clamp(tipX + 30, -w / 2 + 30, w / 2 - 30);
-    ctx.beginPath(); rr(ctx, -w / 2, -h / 2, w, h, 24); ctx.moveTo(ax + 15, h / 2 - 1); ctx.lineTo(tipX, h / 2 + 34); ctx.lineTo(ax - 15, h / 2 - 1);
-    ctx.fillStyle = 'rgba(255,255,255,0.94)'; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(60,120,60,0.35)'; ctx.beginPath(); rr(ctx, -w / 2, -h / 2, w, h, 24); ctx.stroke();
-    lines.forEach((l, i) => drawText(ctx, l, 0, -h / 2 + 34 + i * 38, { size, color: '#2b3a2b', stroke: false }));
+    ctx.save(); ctx.shadowColor = 'rgba(25,35,70,0.25)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+    ctx.beginPath(); rr(ctx, -w / 2, -h / 2, w, h, h > 70 ? 26 : h / 2); ctx.moveTo(ax + 14, h / 2 - 1); ctx.lineTo(tipX, h / 2 + 30); ctx.lineTo(ax - 14, h / 2 - 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.96)'; ctx.fill(); ctx.restore();
+    lines.forEach((l, i) => LG.text(ctx, l, 0, -h / 2 + 32 + i * 36, { size, font: 'uiHeavy' }));
     ctx.restore();
   },
   /* ---------- Abstimmung: Farbe fürs nächste Monster ---------- */
   drawVote(ctx, t) {
     const v = Monster.vote; if (!v) return;
-    const cx = CONFIG.layout.centerX, inK = easeOutBack(clamp(v.t / 0.4, 0, 1)), left = Math.max(0, v.dur - v.t), W = 880, H = 430, cy = 850;
-    ctx.save(); ctx.translate(cx, cy); ctx.scale(inK, inK);
-    Glass.draw(ctx, -W / 2, -H / 2, W, H, 34, { alpha: 0.88, border: 'rgba(156,240,138,0.8)', glow: 'rgba(156,240,138,0.7)' });
-    drawText(ctx, 'NÄCHSTES MONSTER', 0, -H / 2 + 44, { size: 30, font: 'serif', color: '#9cf08a', stroke: false });
-    drawText(ctx, 'Welche Farbe soll es haben?', 0, -H / 2 + 100, { size: 52, font: 'title', color: '#fff3d6', strokeWidth: 7, strokeColor: '#1c120c', drop: false, maxWidth: 820 });
+    const LG = LiquidGlass, cx = CONFIG.layout.centerX, inK = easeOutBack(clamp(v.t / 0.4, 0, 1)), left = Math.max(0, v.dur - v.t), W = 880, H = 420, x = cx - W / 2, y = 640;
+    ctx.save(); ctx.translate(cx, y + H / 2); ctx.scale(inK, inK); ctx.translate(-cx, -(y + H / 2));
+    LG.draw(ctx, x, y, W, H, 36, { tint: 'rgba(255,255,255,0.5)' });
+    LG.text(ctx, 'NÄCHSTES BABY-MONSTER', cx, y + 42, { size: 19, color: LG.SUB });
+    LG.text(ctx, 'Welche Farbe soll es haben?', cx, y + 92, { size: 44, font: 'uiHeavy', maxWidth: 820 });
     const total = Math.max(1, v.counts.reduce((a, b) => a + b, 0)), max = Math.max(...v.counts);
     RACE_COLORS.forEach((C, i) => {
-      const col = i % 3, row = Math.floor(i / 3), x = -W / 2 + 40 + col * 272, y = -H / 2 + 150 + row * 92, w = 256, hh = 76;
-      ctx.beginPath(); rr(ctx, x, y, w, hh, 22); ctx.fillStyle = hexA(C.col, 0.28); ctx.fill();
-      ctx.save(); ctx.beginPath(); rr(ctx, x, y, w, hh, 22); ctx.clip(); ctx.fillStyle = hexA(C.col, 0.75); ctx.fillRect(x, y, w * v.counts[i] / total, hh); ctx.restore();
-      ctx.lineWidth = v.counts[i] === max && max > 0 ? 4 : 2; ctx.strokeStyle = v.counts[i] === max && max > 0 ? '#ffffff' : hexA(C.col, 0.9); ctx.beginPath(); rr(ctx, x, y, w, hh, 22); ctx.stroke();
-      drawText(ctx, C.key === 'gruen' ? 'grün' : C.key, x + 22, y + hh / 2 + 2, { size: 34, font: 'title', align: 'left', color: '#ffffff', strokeWidth: 5, strokeColor: hexA(C.dark, 0.9), drop: false });
-      drawText(ctx, String(v.counts[i]), x + w - 20, y + hh / 2 + 2, { size: 34, font: 'title', align: 'right', color: '#ffffff', strokeWidth: 5, strokeColor: hexA(C.dark, 0.9), drop: false });
+      const col = i % 3, row = Math.floor(i / 3), bx = x + 40 + col * 272, by = y + 140 + row * 92, w = 256, hh = 76, lead = v.counts[i] === max && max > 0;
+      ctx.beginPath(); rr(ctx, bx, by, w, hh, hh / 2); ctx.fillStyle = hexA(C.col, 0.22); ctx.fill();
+      ctx.save(); ctx.beginPath(); rr(ctx, bx, by, w, hh, hh / 2); ctx.clip(); ctx.fillStyle = hexA(C.col, 0.85); ctx.fillRect(bx, by, Math.max(hh, w * v.counts[i] / total), hh); ctx.restore();
+      if (lead) { ctx.lineWidth = 4; ctx.strokeStyle = '#ffffff'; ctx.beginPath(); rr(ctx, bx, by, w, hh, hh / 2); ctx.stroke(); }
+      LG.text(ctx, C.key === 'gruen' ? 'grün' : C.key, bx + 28, by + hh / 2 + 1, { size: 32, font: 'uiHeavy', align: 'left', color: '#ffffff', stroke: true, strokeWidth: 4, strokeColor: hexA(C.dark, 0.7), drop: false });
+      LG.text(ctx, String(v.counts[i]), bx + w - 26, by + hh / 2 + 1, { size: 32, font: 'uiHeavy', align: 'right', color: '#ffffff', stroke: true, strokeWidth: 4, strokeColor: hexA(C.dark, 0.7), drop: false });
     });
-    drawText(ctx, `Schreib eine Farbe in den Chat · noch ${Math.ceil(left)} s`, 0, H / 2 - 34, { size: 30, color: HUD.TXT, stroke: false });
+    LG.text(ctx, `Schreib eine Farbe in den Chat · noch ${Math.ceil(left)} s`, cx, y + H - 36, { size: 26, color: LG.SUB });
     ctx.restore();
+  },
+  /* ---------- Einblendungen als Glas-Kapsel ---------- */
+  drawToasts(ctx) {
+    const LG = LiquidGlass;
+    let y = 1236;
+    for (const tt of Game.toasts) {
+      const inK = clamp(tt.t / 0.3, 0, 1), outK = clamp((tt.life - tt.t) / 0.35, 0, 1);
+      const size = tt.prio >= 3 ? 34 : 30, icon = Icon.EMOJI[tt.icon] || null;
+      const u = CONFIG.avatars.enabled && tt.uid != null ? Users.map.get(tt.uid) : null;
+      const lead = (icon ? 48 : 0) + (u ? 56 : 0), h = 70;
+      const tw = Math.min(880, Math.ceil((measureText(ctx, tt.text, size, 'ui') + 70 + lead) / 40) * 40), x = CONFIG.layout.centerX - tw / 2;
+      ctx.save(); ctx.globalAlpha = outK; const s = easeOutBack(inK); ctx.translate(CONFIG.layout.centerX, y); ctx.scale(s, s); ctx.translate(-CONFIG.layout.centerX, -y);
+      LG.draw(ctx, x, y - h / 2, tw, h, h / 2, { tint: 'rgba(255,255,255,0.55)' });
+      let cx = x + 26;
+      if (icon) { Icon.draw(ctx, icon, cx + 18, y, 38, now()); cx += 48; }
+      if (u) { Avatars.draw(ctx, u, cx + 24, y, 23, 'rgba(255,255,255,0.95)'); cx += 56; }
+      const textW = x + tw - 24 - cx;
+      LG.text(ctx, tt.text, cx + textW / 2, y + 1, { size, font: 'uiHeavy', maxWidth: textW });
+      ctx.restore();
+      y -= 84;
+    }
   },
 };
 
