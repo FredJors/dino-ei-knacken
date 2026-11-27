@@ -168,7 +168,11 @@ const CONFIG = {
     like: 0.08, likeMaxPerBundle: 1.2,    // Likes = Snacks (gebündelt je Nutzer und Sekunde)
     follow: 8, share: 5, giftPerDiamond: 0.5, giftMin: 2, giftMax: 15,   // Geschenke gedeckelt, keine Aufforderung
     hungerSec: 100, sleepAfterSec: 75,    // Hunger sinkt in ~100 s auf null; ohne Futter schläft es nach 75 s ein
-    burpAt: 14, voteSec: 20, maxFlying: 30,
+    burpAt: 14, voteSec: 20, maxFlying: 60,
+    hypeLikes: 50,                        // alle 50 Likes startet (bzw. verlängert sich) der Fressrausch
+    likeSnacksMax: 15,                    // so viele Snacks fliegen höchstens pro Like-Paket (der Rest zählt trotzdem)
+    critChance: 0.05, goldenChance: 0.02, // kritischer Biss ×3 / goldenes Essen (großer Wachstums-Schub)
+    eventsEnabled: true, eventMinSec: 140, eventMaxSec: 210,   // Events im Wechsel (Goldene Minute, Mega-Burger …)
     saveKey: 'dinoMonster.v1',
   },
   race: {                               // FARB-RENNEN
@@ -329,7 +333,9 @@ function downloadFile(filename, content, mime = 'application/json') {
 const DINO_KEYS = ['trex', 'triceratops', 'stegosaurus', 'brachiosaurus', 'velociraptor', 'ankylosaurus', 'parasaurolophus', 'spinosaurus', 'pteranodon', 'dilophosaurus'];
 const Assets = {
   files: Object.assign({ bg: 'bg_cave.jpg', bgBoss: 'bg_cave_boss.jpg', bgRace: 'bg_race.jpg', bgMonster: 'bg_monster.jpg',
-    ...Object.fromEntries(['idle', 'blink', 'open', 'chew', 'chew2', 'yum', 'happy', 'wow', 'hungry', 'sleep', 'burp', 'crouch', 'grow', 'dance'].map(k => ['monster_' + k, `monster_${k}.webp`])),
+    ...Object.fromEntries(['idle', 'blink', 'open', 'chew', 'chew2', 'yum', 'happy', 'wow', 'hungry', 'sleep', 'burp', 'crouch', 'grow', 'dance', 'love', 'dizzy', 'full', 'laugh', 'think'].map(k => ['monster_' + k, `monster_${k}.webp`])),
+    ...Object.fromEntries(['partyhat', 'sunglasses', 'crown', 'bowtie', 'chefhat'].map(k => ['acc_' + k, `acc_${k}.webp`])),
+    chest_closed: 'chest_closed.webp', chest_open: 'chest_open.webp',
     ...Object.fromEntries(['candy', 'cookie', 'apple', 'donut', 'burger', 'pizza', 'icecream', 'cake'].map(k => ['food_' + k, `food_${k}.webp`])), rocks: 'fg_rocks.webp', meteor: 'meteor.webp', egg_boss: 'egg_boss.webp' },
     Object.fromEntries([1, 2, 3, 4, 5, 6].map(i => ['egg_' + i, `egg_${i}.webp`])),
     Object.fromEntries(DINO_KEYS.map(k => ['dino_' + k, `dino_${k}.webp`]))),
@@ -588,7 +594,7 @@ class AudioEngine {
     for (let i = 0; i < 6; i++) this._osc('sine', this._n(88 + randInt(0, 10)), null, t + 0.1 + i * 0.08, 0.2, 0.04);
   }
   rumble(dur = 1.6, vol = 0.25) { if (!this._ok()) return; const t = this.ctx.currentTime; this._noise(t, dur, vol, 'lowpass', 220, 60, 1); }
-  chomp() { if (!this._ok()) return; const t = this.ctx.currentTime; this._noise(t, 0.07, 0.16, 'bandpass', 1100, 500, 3); this._osc('square', 190, 90, t, 0.06, 0.04); }
+  chomp(k = 1) { if (!this._ok()) return; const t = this.ctx.currentTime; this._noise(t, 0.07, 0.16, 'bandpass', 1100 * k, 500 * k, 3); this._osc('square', 190 * k, 90 * k, t, 0.06, 0.04); }
   burp() { if (!this._ok()) return; const t = this.ctx.currentTime; this._osc('sawtooth', 130, 70, t, 0.5, 0.1); this._noise(t, 0.45, 0.12, 'lowpass', 420, 140, 2); }
   sparkle() { if (!this._ok()) return; const t = this.ctx.currentTime; [88, 91, 95, 100].forEach((n, i) => this._osc('sine', this._n(n), null, t + i * 0.06, 0.25, 0.05)); }
   hype() {                                 // Hype startet: aufsteigender Wusch + Akkord
@@ -4425,6 +4431,7 @@ const Host = {
         case 'testActivity': TestSim.activity = clamp(Number(cmd.v) || 0, 0, 100); return { msg: '' };
         case 'forceTest': Net.forceTest = !!cmd.v; Net.updateTestMode(); return { msg: Net.forceTest ? 'Testmodus erzwungen' : 'Testmodus automatisch' };
         case 'event': return { msg: 'Ereignis: ' + World.randomEvent(cmd.k) };
+        case 'mevent': return { msg: MONSTER_MODE ? MonsterFun.trigger(cmd.k) : 'Nur im Monster-Spiel' };
         case 'set': {
           const def = getPath(CONFIG_DEFAULTS, cmd.path); if (def === undefined) return { msg: 'Unbekannte Einstellung' };
           let v = cmd.value; if (typeof def === 'number') v = Number(v); if (typeof def === 'boolean') v = !!v;
@@ -4504,7 +4511,7 @@ const TestBar = {
 
 /* Panel-UI (DOM) */
 const SETTINGS_UI = [
-  ['Monster füttern', [['monster.levelSec', 'Sekunden pro Level (etwa)', 45, 600, 15], ['monster.maxLevel', 'Max-Level (dann Party + Farbwahl)', 3, 20, 1], ['monster.like', 'Wachstum pro Like', 0.01, 0.5, 0.01], ['monster.follow', 'Follow', 0, 40, 1], ['monster.sleepAfterSec', 'Schläft ein nach (s)', 20, 300, 5]]],
+  ['Monster füttern', [['monster.levelSec', 'Sekunden pro Level (etwa)', 45, 600, 15], ['monster.maxLevel', 'Max-Level (dann Party + Farbwahl)', 3, 20, 1], ['monster.like', 'Wachstum pro Like', 0.01, 0.5, 0.01], ['monster.follow', 'Follow', 0, 40, 1], ['monster.sleepAfterSec', 'Schläft ein nach (s)', 20, 300, 5], ['monster.hypeLikes', 'Fressrausch alle … Likes', 10, 500, 10], ['monster.eventsEnabled', 'Events automatisch', 'bool'], ['monster.eventMinSec', 'Event frühestens alle (s)', 30, 600, 10], ['monster.eventMaxSec', 'Event spätestens alle (s)', 40, 900, 10]]],
   ['Farb-Rennen', [['race.targetSec', 'Rennen dauert etwa (s)', 30, 180, 5], ['race.maxSec', 'Rennen höchstens (s)', 45, 240, 5], ['race.cooldownMs', 'Rennen: Cooldown/Nutzer (ms)', 0, 5000, 250], ['race.autoTeam', 'Ohne Farbe → ins kleinste Team', 'bool']]],
   ['Meteor-Timer (Sekunden)', [['timer.normal', 'Normales Ei', 60, 600, 10], ['timer.boss', 'Boss-Ei', 60, 900, 10], ['timer.duel', 'Duell', 60, 600, 10], ['timer.urgentAt', 'Dringlich ab', 10, 60, 5]]],
   ['HP = (Basis + proNutzer · eff^Exp) · Faktor, eff = aktive²/(aktive+Bonus)', [['hp.base', 'Basis', 1, 300, 1], ['hp.perUser', 'pro aktivem Nutzer', 0.5, 40, 0.5], ['hp.exponent', 'Exponent', 0.5, 1.2, 0.01], ['hp.smallGroup', 'Kleingruppen-Bonus', 0, 10, 0.5], ['hp.bossMult', 'Boss-Faktor', 1, 6, 0.1], ['hp.duelMult', 'Duell-Faktor (je Ei)', 0.2, 1.5, 0.05], ['hp.afterImpactMult', 'nach Einschlag', 0.3, 1, 0.05]]],
@@ -4542,6 +4549,7 @@ const Panel = {
       [['B', 'Boss-Ei als Nächstes'], ['D', 'Duell als Nächstes'], ['E', 'Zufallsereignis'], ['P', 'Pause-Screen'], ['M', 'Ton an/aus'], ['R', 'Ei neu starten'], ['N', '🎯 Mission starten'], ['X', '🔥 Hype starten']]
         .map(([k, l]) => `<button data-hot="${k}"><kbd>${k}</kbd>${l}</button>`).join('') + '</div>');
     h.push('<div class="btns" style="margin-top:6px">' + [['drips', '💧 Tropfen'], ['quake', '🪨 Beben'], ['eruption', '🌋 Lava-Ausbruch'], ['butterflies', '🦋 Falter'], ['stumble', '🦕 Stolpern'], ['flyby', '🦅 Flugsaurier'], ['parade', '🏃 Herden-Parade'], ['fireflies', '✨ Glühwürmchen']].map(([k, l]) => `<button data-ev="${k}">${l}</button>`).join('') + '</div>');
+    h.push('<div class="hint" style="margin-top:8px;color:#ffe680">Monster-Events</div><div class="btns">' + [['gold', '✨ Goldene Minute'], ['wishrush', '🍕 Wunsch-Rush'], ['mega', '🍔 Mega-Burger'], ['chest', '🎁 Schatzkiste'], ['dance', '🪩 Tanz-Party'], ['guess', '🤔 Rate-Runde'], ['wheel', '🎡 Glücksrad']].map(([k, l]) => `<button data-mev="${k}">${l}</button>`).join('') + '</div>');
     if (!IS_PANEL) h.push('<div class="btns" style="margin-top:6px;grid-template-columns:1fr"><button data-act="window">↗️ Panel in eigenem Fenster öffnen (empfohlen im Stream)</button></div>');
     h.push('<pre id="pLog" class="hint" style="white-space:pre-wrap;min-height:1.2em;margin:6px 0 0"></pre>');
     h.push('<h2>Testmodus</h2><div class="hint" id="pTestInfo"></div>');
@@ -4576,6 +4584,7 @@ const Panel = {
       if (b.dataset.game) this.send({ c: 'game', g: b.dataset.game });
       else if (b.dataset.hot) this.send({ c: 'hotkey', k: b.dataset.hot });
       else if (b.dataset.ev) this.send({ c: 'event', k: b.dataset.ev });
+      else if (b.dataset.mev) this.send({ c: 'mevent', k: b.dataset.mev });
       else if (b.dataset.test) this.send({ c: 'test', k: b.dataset.test });
       else if (b.dataset.bool) { const cur = this.status ? getPath(this.status.config, b.dataset.bool) : getPath(CONFIG, b.dataset.bool); this.send({ c: 'set', path: b.dataset.bool, value: !cur }); }
       else if (b.dataset.mute) this.send({ c: 'mute', id: b.dataset.mute, v: b.dataset.v === '1' });
@@ -5365,7 +5374,7 @@ const Monster = {
     if (!isBot) StatsLog.count(ev);
     if (ev.type === 'member') return;
     const u = Users.touch(ev), M = CONFIG.monster;
-    Hype.add({ chat: 1, like: Math.min(1.2, (ev.count || 1) * 0.08), follow: 3, share: 2.5, gift: 2 }[ev.type] || 0);
+    if (!M.hypeLikes) Hype.add({ chat: 1, like: Math.min(1.2, (ev.count || 1) * 0.08), follow: 3, share: 2.5, gift: 2 }[ev.type] || 0);
     switch (ev.type) {
       case 'chat': {
         if (!u.mGreeted && !isBot && !u.muted && !u.filtered) { u.mGreeted = true; this.greetBuf.push(u); }
@@ -5375,11 +5384,12 @@ const Monster = {
         u.mHitAt = tn;
         const named = parseFood(ev.text), food = named || 'cookie';
         let xp = M.comment + (named ? M.namedBonus : 0);
+        xp *= MonsterFun.chatMult(u, ev.text, named);
         if (named && named === this.fav.key) { xp *= M.favMult; if (now() - this.bubbleAt > 4) this.say(pick(MONSTER_LINES.fav)); }
         this.feed(u, xp, food, 'chat');
         break;
       }
-      case 'like': u.likeBuf = (u.likeBuf || 0) + Math.max(1, ev.count || 1); break;
+      case 'like': MonsterFun.likes(u, Math.max(1, ev.count || 1)); break;
       case 'follow':
         this.feed(u, M.follow, 'burger', 'side'); this.wowT = Math.max(this.wowT, 1.0);
         Game.toast(`Danke fürs Folgen, ${Users.label(u)}!`, { color: '#ffd84a', icon: '⭐', prio: 3, u });
@@ -5395,7 +5405,7 @@ const Monster = {
     }
   },
   /* Essen werfen: Punkte zählen sofort für die Bestenliste, Wachstum wenn es im Maul landet */
-  feed(u, xp, food, from) {
+  feed(u, xp, food, from, o = {}) {
     xp *= Hype.mult;
     this.recent.push({ t: gnow(), p: xp });
     if (this.recent.length > 9000) this.recent.splice(0, this.recent.length - 9000);
@@ -5405,9 +5415,9 @@ const Monster = {
       for (const m of [this.fans.today, this.fans.all]) { const f = m[u.id] || (m[u.id] = { n: u.name, p: 0 }); f.n = u.name; f.p += xp; }
       this.boardDirty = true;
     }
-    this.throwFood(food, xp, u && !u.muted ? u.name : null, from);
+    this.throwFood(food, xp, u && !u.muted && !o.quiet ? u.name : null, from, o);
   },
-  throwFood(food, xp, name, from) {
+  throwFood(food, xp, name, from, o = {}) {
     if (this.foods.length >= CONFIG.monster.maxFlying) {            // zu viel los: Punkte auf ein fliegendes Essen packen
       const f = pick(this.foods); f.xp += xp; return;
     }
@@ -5419,11 +5429,13 @@ const Monster = {
     const [mx, my] = this.mouth();
     const top = from === 'top' || from === 'rain';
     this.foods.push({ food, xp, name, x0, y0, cx: (x0 + mx) / 2 + rand(-90, 90), cy: top ? my - rand(60, 160) : Math.min(y0, my) - rand(160, 360),
-      t: 0, dur: top ? rand(0.9, 1.3) : rand(0.75, 1.05), rot: rand(0, TAU), vr: rand(-6, 6), size: FOODS[food].size * rand(0.9, 1.1) });
+      t: -(o.delay || 0), dur: top ? rand(0.9, 1.3) : rand(0.75, 1.05), rot: rand(0, TAU), vr: rand(-6, 6), size: FOODS[food].size * rand(0.9, 1.1),
+      golden: xp > 0 && Math.random() < CONFIG.monster.goldenChance, gilded: MonsterFun.goldNow() });
   },
   arrive(f) {
     const M = CONFIG.monster;
     if (f.xp > 0) {
+      f.xp = MonsterFun.onArrive(f);
       if (!this.vote && !this.party && this.hatchT < 0) { this.xp += f.xp; if (this.xp >= this.need && !this.lvl) this.levelUp(); }
       this.hunger = Math.min(1, this.hunger + 0.06 + f.xp * 0.02);
       this.lastFeedAt = gnow();
@@ -5434,7 +5446,7 @@ const Monster = {
       if (Math.random() < 0.04 && now() - this.bubbleAt > 7) this.say(pick(MONSTER_LINES.fed));
     }
     this.chewT = Math.min(1.4, Math.max(this.chewT, 0.5) + 0.12); this.bite = 1;
-    if (now() - (this._chompAt || 0) > 0.12) { this._chompAt = now(); Sound.chomp(); }
+    if (now() - (this._chompAt || 0) > 0.09) { this._chompAt = now(); Sound.chomp(1 + Math.min(MonsterFun.combo.n, 30) * 0.035); }
     const [mx, my] = this.mouth();
     for (let i = 0; i < 4; i++) FX.spawn({ type: 'spark', layer: 2, x: mx + rand(-30, 30), y: my + rand(-10, 20), vx: rand(-120, 120), vy: rand(-200, -60), g: 600, size: rand(3, 6), life: 0.5, color: pick(['#ffe08a', '#ffffff', '#ffb6d9']) });
   },
@@ -5483,6 +5495,7 @@ const Monster = {
     const M = CONFIG.monster, run = !Game.paused;
     if (run) {
       Hype.update(dt);
+      MonsterFun.update(dt);
       // Likes bündeln (1× pro Sekunde je Nutzer) → Snacks
       if (gnow() - this.likeAt >= 1) {
         this.likeAt = gnow();
@@ -5513,7 +5526,7 @@ const Monster = {
           L.phase = 'cheer'; L.t = 0; this.happyT = 1.4;
           for (let i = 0; i < 50; i++) FX.spawn({ type: 'confetti', layer: 2, x: this.X + rand(-200, 200), y: this.GY - this.dispH - 20, vx: rand(-420, 420), vy: rand(-800, -300), g: 900, drag: 1.2, size: rand(6, 10), rot: rand(0, TAU), vr: rand(-8, 8), life: rand(1.5, 2.3), color: pick(['#9cf08a', '#ffd84a', '#ff7fb0', '#5cc8ff']) });
         } else if (L.phase === 'cheer' && L.t >= 1.3) {
-          this.lvl = null; this.save();
+          this.lvl = null; this.save(); MonsterFun.afterLevel();
           if (this.xp >= this.need) this.levelUp();
         }
       }
@@ -5578,6 +5591,7 @@ const Monster = {
     if (this.hatchT >= 0 && this.hatchT < 0.5) return 'wow';
     if (this.lvl) return this.lvl.phase === 'crouch' ? 'crouch' : this.lvl.phase === 'grow' ? 'grow' : 'happy';
     if (this.party > 0) return Math.floor(this.party / 0.35) % 2 ? 'dance' : 'happy';
+    { const fp = MonsterFun.pose(); if (fp) return fp; }
     if (this.vote) return this.incoming() ? 'open' : this.chewT > 0 ? (Math.floor(this.chewT / 0.15) % 2 ? 'chew' : 'chew2') : 'happy';
     if (this.wowT > 0) return 'wow';
     if (this.burpT > 0) return 'burp';
@@ -5597,7 +5611,7 @@ const Monster = {
       case 'P': Game.paused = !Game.paused; Sound.paused = Game.paused; return Game.paused ? 'Pause an' : 'Pause aus';
       case 'M': Sound.setMuted(!Sound.muted); return Sound.muted ? 'Ton aus' : 'Ton an';
       case 'X': return Hype.start() ? 'Fressrausch gestartet' : 'Fressrausch gerade nicht möglich';
-      case 'E': for (let i = 0; i < 14; i++) this.throwFood(pick(FOOD_KEYS), 0, null, 'rain'); return 'Essensregen';
+      case 'E': return MonsterFun.trigger(pick(Object.keys(MF_EVENTS)));
       case 'R': this.level = 1; this.xp = 0; this.need = this.targetNeed(); this.dispH = this.toH = this.targetH(1); this.lvl = null; this.party = 0; this.vote = null; this.cur = new Map(); this.boardDirty = true; this.save(); return 'Monster zurück auf Level 1';
       case 'N': if (this.level < CONFIG.monster.maxLevel) { this.xp = this.need; if (!this.lvl) this.levelUp(); return 'Level-Up!'; } this.startParty(); return 'Party!';
     }
@@ -5700,10 +5714,12 @@ const MonsterView = {
     if (bg) ctx.drawImage(bg, 0, 0);
     else { const g = ctx.createLinearGradient(0, 0, 0, 1920); g.addColorStop(0, '#9fc8ff'); g.addColorStop(0.45, '#ffd0ea'); g.addColorStop(0.5, '#8fd468'); g.addColorStop(1, '#3f8a3a'); ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1920); }
     MonsterAmbient.draw(ctx);
+    MonsterFun.drawBack(ctx, t);
     FX.draw(ctx, 0);
     if (Hype.active > 0) { const gs = M.dispH * 1.2; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.35 + Math.sin(t * 10) * 0.12; ctx.drawImage(softBlob('#ffb13d'), M.X - gs, M.GY - M.dispH * 0.5 - gs, gs * 2, gs * 2); ctx.restore(); }
     this.drawMonster(ctx, t);
     this.drawFoods(ctx);
+    MonsterFun.drawWorld(ctx, t);
     FX.draw(ctx, 1);
     FX.draw(ctx, 2);
     HUD.drawPops(ctx);
@@ -5718,6 +5734,7 @@ const MonsterView = {
     this.drawBubble(ctx, t);
     HUD.drawCallouts(ctx);
     this.drawVote(ctx, t);
+    MonsterFun.drawHud(ctx, t);
     this.drawToasts(ctx);
     HUD.drawPause(ctx, t);
     HUD.drawHints(ctx, t);
@@ -5738,19 +5755,22 @@ const MonsterView = {
     if (MonsterArt.has()) {
       const img = MonsterArt.frame(pose, M.toH, M.tint), k = h / img.height;
       ctx.drawImage(img, -img.width * k / 2, -img.height * k, img.width * k, img.height * k);
+      MonsterFun.drawOutfit(ctx, img.width * k, img.height * k, pose);
     } else {
       ctx.fillStyle = '#7bd35b'; ctx.beginPath(); ctx.ellipse(0, -h * 0.45, h * 0.42, h * 0.42, 0, 0, TAU); ctx.fill();
       ctx.fillStyle = '#222'; for (const dx of [-0.13, 0.13]) { ctx.beginPath(); ctx.arc(dx * h, -h * 0.55, h * 0.05, 0, TAU); ctx.fill(); }
     }
     ctx.restore();
-    if (M.level >= CONFIG.monster.maxLevel || M.party > 0) Icon.draw(ctx, 'crown', M.X - h * 0.16, M.GY - M.hop - h * 0.92 + Math.sin(t * 3) * 3, h * 0.16);
+    if ((M.level >= CONFIG.monster.maxLevel || M.party > 0) && !Assets.has('acc_crown')) Icon.draw(ctx, 'crown', M.X - h * 0.16, M.GY - M.hop - h * 0.92 + Math.sin(t * 3) * 3, h * 0.16);
   },
   drawFoods(ctx) {
     for (const f of Monster.foods) {
+      if (f.t < 0) continue;
       const k = clamp(f.t / f.dur, 0, 1), u = 1 - k, [mx, my] = Monster.mouth();
       const x = u * u * f.x0 + 2 * u * k * f.cx + k * k * mx, y = u * u * f.y0 + 2 * u * k * f.cy + k * k * my;
-      const s = f.size * (1 - k * 0.45), img = MonsterArt.food(f.food, f.size);
-      if (k < 0.9) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.35; ctx.drawImage(softBlob('#fff2c0'), x - s * 0.7, y - s * 0.7, s * 1.4, s * 1.4); ctx.restore(); }
+      const gold = f.golden || f.gilded, s = f.size * (1 - k * 0.45) * (f.golden ? 1.25 : 1), img = gold ? MonsterFun.goldFood(f.food, f.size) : MonsterArt.food(f.food, f.size);
+      if (f.golden && Math.random() < 0.5) FX.spawn({ type: 'star', layer: 2, x: x + rand(-20, 20), y: y + rand(-20, 20), vx: rand(-40, 40), vy: rand(-40, 40), size: rand(6, 10), rot: 0, vr: 3, life: 0.5, color: '#ffd60a' });
+      if (k < 0.9) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = gold ? 0.6 : 0.35; ctx.drawImage(softBlob(gold ? '#ffd60a' : '#fff2c0'), x - s * 0.7, y - s * 0.7, s * 1.4, s * 1.4); ctx.restore(); }
       ctx.save(); ctx.translate(x, y); ctx.rotate(f.rot * 0.3);
       if (img) { const r = s / Math.max(img.width, img.height); ctx.drawImage(img, -img.width * r / 2, -img.height * r / 2, img.width * r, img.height * r); }
       else drawText(ctx, FOODS[f.food].emo[0], 0, 0, { size: s * 0.8, stroke: false });
@@ -5931,6 +5951,389 @@ const MonsterView = {
 };
 
 /* ==========================================================================
+   17b. MEHR ACTION fürs Monster: jeder Like ein Snack, alle 50 Likes Fressrausch,
+        Combo-Zähler, kritische Bissen, goldenes Essen, Wunsch-Blase, Glücksrad
+        nach jedem Level, Outfits, neue Posen und wechselnde Events.
+   ========================================================================== */
+/* Outfits: Lage auf dem Monster-Bild (Anteile von Bildbreite/-höhe), Größe als Anteil der Bildhöhe */
+const OUTFITS = {
+  bowtie:     { x: 0.50, y: 0.75, h: 0.12, rot: 0 },
+  sunglasses: { x: 0.50, y: 0.45, h: 0.13, rot: 0 },
+  partyhat:   { x: 0.37, y: 0.10, h: 0.30, rot: -0.42 },
+  crown:      { x: 0.63, y: 0.10, h: 0.17, rot: 0.32 },
+  chefhat:    { x: 0.50, y: 0.05, h: 0.30, rot: 0 },
+};
+const GLASSES_HIDE = new Set(['love', 'dizzy', 'laugh', 'sleep', 'wow', 'hungry']);           // Posen mit besonderen Augen
+const GLASSES_Y = { open: 0.30, full: 0.35, chew2: 0.425, think: 0.425, yum: 0.42, burp: 0.41, blink: 0.433, crouch: 0.456 };   // Augenhöhe je Pose (gemessen)
+const WHEEL = [
+  { key: 'hat', label: 'Party-Hut', col: '#ff2d55' }, { key: 'gold', label: 'Goldregen', col: '#ffcc00' },
+  { key: 'boost', label: 'Wachstum', col: '#34c759' }, { key: 'dance', label: 'Tanzen', col: '#af52de' },
+  { key: 'rush', label: 'Fressrausch', col: '#ff9500' }, { key: 'chef', label: 'Kochmütze', col: '#5ac8fa' },
+  { key: 'confetti', label: 'Konfetti', col: '#ff6fb5' }, { key: 'love', label: 'Liebe', col: '#ff3b30' },
+];
+const MF_EVENTS = {
+  gold:     { title: 'GOLDENE MINUTE', col: '#ffb800', dur: 45, sub: () => 'Alles zählt doppelt!' },
+  wishrush: { title: 'WUNSCH-RUSH', col: '#ff2d55', dur: 50, sub: e => `${FOODS[e.food].name} zählt dreifach!` },
+  mega:     { title: 'MEGA-BURGER', col: '#ff9500', dur: 60, sub: () => 'Gemeinsam aufessen!' },
+  chest:    { title: 'SCHATZKISTE', col: '#c58a00', dur: 60, sub: () => 'Wer bringt sie zum Öffnen?' },
+  dance:    { title: 'TANZ-PARTY', col: '#af52de', dur: 40, sub: () => 'Combo zählt doppelt!' },
+  guess:    { title: 'RATE-RUNDE', col: '#007aff', dur: 35, sub: () => `Was frisst ${CONFIG.monster.name || 'das Monster'} als Nächstes?` },
+};
+
+const MonsterFun = {
+  likeCount: 0, likeLog: [], combo: { n: 0, at: -9, pop: 0 }, wish: null, nextWishAt: 18, wheel: null, wheelA: 0, wheelTickAt: 0,
+  event: null, banner: null, nextEventAt: 120, until: { hat: 0, chef: 0, gold: 0, dance: 0 },
+  loveT: 0, dizzyT: 0, fullT: 0, laughT: 0, thinkT: 0, wasRush: false, kingId: null, kingAt: 0, goldCache: new Map(),
+
+  /* ---------- Likes: jeder Like ein Snack, alle N Likes Fressrausch ---------- */
+  likes(u, n) {
+    const M = CONFIG.monster, show = Math.min(n, M.likeSnacksMax);
+    for (let i = 0; i < show; i++) Monster.feed(u, M.like * (i === show - 1 ? n - show + 1 : 1), pick(['candy', 'apple', 'donut']), 'like', { delay: i * 0.07, quiet: i > 0 });
+    this.likeCount += n; this.likeLog.push({ t: gnow(), n });
+    while (this.likeCount >= M.hypeLikes) { this.likeCount -= M.hypeLikes; this.rush(); }
+  },
+  rush() {
+    if (Hype.active > 0) {
+      Hype.active = Math.min(Hype.active + 8, 25);
+      const [mx, my] = Monster.mouth(); Game.pops.push({ text: '+8 s FRESSRAUSCH', x: mx, y: my - 160, t: 0, life: 1.3, color: '#ffcc00', size: 40, font: 'uiHeavy' });
+    } else { Hype.cooldown = 0; Hype.start(); }
+  },
+  likesPerSec(win = 30) { const lim = gnow() - win; while (this.likeLog.length && this.likeLog[0].t < lim) this.likeLog.shift(); return this.likeLog.reduce((a, l) => a + l.n, 0) / win; },
+  goldNow() { return gnow() < this.until.gold || (this.event && this.event.key === 'gold'); },
+  danceOn() { return gnow() < this.until.dance || (this.event && this.event.key === 'dance'); },
+
+  /* ---------- Kommentare: Wunsch-Rush ×3, Rate-Runde sammelt Tipps ---------- */
+  chatMult(u, text, named) {
+    const e = this.event;
+    if (e && e.key === 'guess' && named) e.guesses.set(u.id, { food: named, u });
+    if (e && e.key === 'wishrush' && named === e.food) return 3;
+    return 1;
+  },
+
+  /* ---------- Landet Essen im Maul: Combo, Krit, Gold, Wunsch, Mega-Burger, Schatzkiste ---------- */
+  onArrive(f) {
+    const M = CONFIG.monster, t = gnow(), c = this.combo;
+    let xp = f.xp;
+    c.n = t - c.at < 1.8 ? c.n + (this.danceOn() ? 2 : 1) : 1; c.at = t; c.pop = 1;
+    for (const [n, txt] of [[10, 'SUPER'], [25, 'MEGA'], [50, 'ULTRA'], [100, 'LEGENDÄR'], [200, 'GÖTTLICH']]) {
+      if (c.n >= n && c.n - (this.danceOn() ? 2 : 1) < n) {
+        Game.callout(`${txt}! COMBO ×${n}`, { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 60 + Math.min(n, 100) * 0.2, life: 1.6 });
+        Sound.sparkle(); this.burst(Monster.X, Monster.GY - Monster.dispH * 0.6, 30);
+      }
+    }
+    xp *= 1 + Math.min(c.n, 50) / 100;                                  // Combo-Bonus bis +50 %
+    if (this.event && this.event.key === 'gold') xp *= 2;
+    if (this.danceOn()) xp *= 1.5;
+    if (Math.random() < M.critChance) {
+      xp *= 3; const [mx, my] = Monster.mouth();
+      Game.pops.push({ text: 'KRITISCH ×3!', x: mx + rand(-60, 60), y: my - 120, t: 0, life: 1.2, color: '#ffd60a', size: 46, font: 'uiHeavy' });
+      Sound.bigHit(); Game.flash = Math.max(Game.flash, 0.22); Game.flashColor = '#fff3b0';
+    }
+    if (f.golden) {
+      xp += Monster.need * 0.08; this.loveT = 1.6;
+      Game.callout(f.name ? `GOLDEN! ${f.name}` : 'GOLDENES ESSEN!', { font: 'uiHeavy', color: '#ffd60a', x: CONFIG.layout.centerX, y: 600, size: 66, life: 1.8 });
+      Sound.hatch('rare'); this.coins(Monster.X, Monster.mouth()[1], 26);
+    }
+    const w = this.wish;
+    if (w && f.food === w.food && !w.done) {
+      w.got++; w.pop = 1;
+      if (w.got >= w.need) {
+        w.done = true; w.doneT = 0; this.laughT = 1.5;
+        Game.callout('Wunsch erfüllt!', { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 72, life: 1.8 });
+        Sound.sparkle(); this.burst(Monster.X, Monster.GY - Monster.dispH, 40);
+        Monster.xp += Monster.need * 0.12; if (Monster.xp >= Monster.need && !Monster.lvl) Monster.levelUp();
+      }
+    }
+    const e = this.event;
+    if (e && e.key === 'mega' && !e.done) { e.hp = Math.max(0, e.hp - xp); e.bite = 1; if (e.hp <= 0) this.megaDone(true); }
+    if (e && e.key === 'chest' && !e.opened) { e.got++; e.last = f.name; if (e.got >= e.need) this.openChest(); }
+    return xp;
+  },
+  burst(x, y, n) { for (let i = 0; i < n; i++) FX.spawn({ type: 'confetti', layer: 2, x: x + rand(-80, 80), y, vx: rand(-480, 480), vy: rand(-900, -300), g: 900, drag: 1.2, size: rand(6, 10), rot: rand(0, TAU), vr: rand(-8, 8), life: rand(1.4, 2.2), color: pick(['#34c759', '#ffcc00', '#ff2d55', '#5ac8fa', '#af52de']) }); },
+  coins(x, y, n) { for (let i = 0; i < n; i++) FX.spawn({ type: 'star', layer: 2, x: x + rand(-40, 40), y: y + rand(-30, 10), vx: rand(-420, 420), vy: rand(-700, -250), g: 1100, size: rand(9, 15), rot: rand(0, TAU), vr: rand(-6, 6), life: rand(1.0, 1.6), color: pick(['#ffd60a', '#ffcc00', '#fff3b0']) }); },
+
+  /* ---------- Wunsch-Blase ---------- */
+  newWish() {
+    const likeFood = Math.random() < 0.65, food = likeFood ? pick(['candy', 'apple', 'donut']) : pick(['pizza', 'burger', 'icecream', 'cookie']);
+    const need = likeFood ? clamp(Math.round(this.likesPerSec() * 45 / 3 * 0.6), 6, 60) : clamp(Math.round(2 + Users.activeCount() * 0.25), 3, 12);
+    this.wish = { food, need, got: 0, t: 0, dur: 45, pop: 1, done: false };
+    this.thinkT = 1.3; Sound.chime(false);
+  },
+
+  /* ---------- Glücksrad nach jedem Level-up ---------- */
+  afterLevel() {
+    if (Monster.level >= CONFIG.monster.maxLevel || this.wheel) return;
+    const res = randInt(0, WHEEL.length - 1), seg = TAU / WHEEL.length;
+    const target = -res * seg, a0 = this.wheelA, base = a0 + TAU * 5;
+    const a1 = base + ((target - base) % TAU + TAU) % TAU;
+    this.wheel = { t: 0, spin: 3.6, hold: 1.8, res, a0, a1, applied: false };
+  },
+  applyReward(key, who) {
+    const t = gnow(), R = WHEEL.find(w => w.key === key) || WHEEL[0];
+    this.laughT = 1.5;
+    Game.callout(who ? `${who}: ${R.label}!` : `${R.label}!`, { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 64, life: 1.8 });
+    switch (key) {
+      case 'hat': this.until.hat = t + 120; break;
+      case 'chef': this.until.chef = t + 120; break;
+      case 'gold': this.until.gold = t + 20; break;
+      case 'dance': this.until.dance = t + 8; break;
+      case 'rush': this.rush(); break;
+      case 'boost': Monster.xp += Monster.need * 0.25; if (Monster.xp >= Monster.need && !Monster.lvl) Monster.levelUp(); break;
+      case 'confetti': this.burst(Monster.X, Monster.GY - Monster.dispH * 0.5, 90); Monster.happyT = 1.5; break;
+      case 'love': this.loveT = 2.2; for (let i = 0; i < 24; i++) FX.spawn({ type: 'star', layer: 2, x: Monster.X + rand(-120, 120), y: Monster.GY - Monster.dispH * 0.6, vx: rand(-300, 300), vy: rand(-600, -200), g: 500, size: rand(10, 16), rot: 0, vr: rand(-3, 3), life: 1.6, color: pick(['#ff2d55', '#ff6fb5', '#ffb3c8']) }); break;
+    }
+    Sound.hatch('epic');
+  },
+
+  /* ---------- Events ---------- */
+  trigger(key) {
+    if (key === 'wheel') { if (this.wheel) return 'Glücksrad dreht schon'; this.afterLevel(); return this.wheel ? 'Glücksrad dreht!' : 'Glücksrad gerade nicht möglich'; }
+    if (!MF_EVENTS[key]) return 'Unbekanntes Event';
+    if (this.busy()) return 'Gerade nicht möglich (Level-up, Party oder Farbwahl)';
+    this.startEvent(key); return 'Event: ' + MF_EVENTS[key].title;
+  },
+  busy() { const M = Monster; return !!(M.lvl || M.party > 0 || M.vote || M.hatchT >= 0 || this.wheel); },
+  startEvent(key) {
+    if (this.event) this.endEvent(false);
+    const D = MF_EVENTS[key], e = { key, t: 0, dur: D.dur };
+    if (key === 'wishrush') e.food = pick(['pizza', 'burger', 'icecream', 'cookie', 'donut']);
+    if (key === 'mega') { e.max = e.hp = Math.max(25, Monster.need * 0.6); e.bite = 0; this.until.chef = Math.max(this.until.chef, gnow() + D.dur); }
+    if (key === 'chest') { e.need = clamp(Math.round((this.likesPerSec() + 0.5) * 20), 15, 150); e.got = 0; e.opened = false; e.openT = 0; }
+    if (key === 'guess') { e.guesses = new Map(); this.thinkT = 2; }
+    if (key === 'dance') this.until.hat = Math.max(this.until.hat, gnow() + D.dur);
+    this.event = e; this.banner = { t: 0, life: 2.8, key, sub: D.sub(e) };
+    Sound.announce('duel'); Game.shake = Math.min(1, Game.shake + 0.25);
+    StatsLog.event('monsterEvent', { key });
+  },
+  endEvent(natural) {
+    const e = this.event; if (!e) return; this.event = null;
+    this.nextEventAt = gnow() + rand(CONFIG.monster.eventMinSec, CONFIG.monster.eventMaxSec);
+    if (!natural) return;
+    if (e.key === 'mega' && !e.done) { Game.callout('Fast geschafft!', { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 64, life: 1.6 }); }
+    if (e.key === 'chest' && !e.opened) { Game.callout('Die Kiste ist weg …', { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 54, life: 1.6 }); }
+    if (e.key === 'guess') this.revealGuess(e);
+  },
+  megaDone(ok) {
+    const e = this.event; if (!e || e.done) return; e.done = true;
+    if (ok) {
+      this.fullT = 2.6; Monster.burpPending = true;
+      Game.callout('MEGA-BURGER GESCHAFFT!', { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 60, life: 2.2 });
+      Sound.hatch('legendary'); this.burst(Monster.X, Monster.GY - Monster.dispH, 80);
+      Monster.xp += Monster.need * 0.3; if (Monster.xp >= Monster.need && !Monster.lvl) Monster.levelUp();
+      e.t = Math.max(e.t, e.dur - 2.5);
+    }
+  },
+  openChest() {
+    const e = this.event; e.opened = true; e.openT = 0;
+    const R = pick(WHEEL);
+    this.coins(860, 1120, 40); Sound.hatch('legendary'); Game.shake = Math.min(1, Game.shake + 0.4);
+    if (e.last) Game.toast(`${e.last} hat die Schatzkiste geöffnet!`, { icon: '🏆', prio: 3, color: '#ffcc00', life: 3.4 });
+    this.applyReward(R.key, null);
+    e.t = Math.max(e.t, e.dur - 3);
+  },
+  revealGuess(e) {
+    const guessed = [...e.guesses.values()].map(g => g.food);
+    const food = guessed.length && Math.random() < 0.6 ? pick(guessed) : pick(FOOD_KEYS);
+    const winners = [...e.guesses.values()].filter(g => g.food === food).map(g => g.u);
+    for (let i = 0; i < 16; i++) Monster.throwFood(food, 0, null, 'rain', { delay: i * 0.08 });
+    for (const u of winners) Monster.feed(u, 5, food, 'top');
+    const names = winners.filter(u => !u.muted).map(u => u.name);
+    Game.callout(`${FOODS[food].name}!`, { font: 'uiHeavy', color: '#ffffff', x: CONFIG.layout.centerX, y: 620, size: 80, life: 2 });
+    Game.toast(names.length ? `Richtig geraten: ${names.slice(0, 4).join(', ')}${names.length > 4 ? ` +${names.length - 4}` : ''}` : 'Diesmal hat niemand richtig geraten!', { icon: '🎯', prio: 2, life: 3.6, color: '#007aff' });
+    this.laughT = 1.4;
+  },
+
+  /* ---------- Update ---------- */
+  update(dt) {
+    const M = Monster, C = CONFIG.monster, t = gnow();
+    this.loveT = Math.max(0, this.loveT - dt); this.laughT = Math.max(0, this.laughT - dt); this.fullT = Math.max(0, this.fullT - dt);
+    this.dizzyT = Math.max(0, this.dizzyT - dt); this.thinkT = Math.max(0, this.thinkT - dt); this.combo.pop = Math.max(0, this.combo.pop - dt * 4);
+    if (C.hypeLikes && Hype.active <= 0) Hype.value = clamp(this.likeCount / C.hypeLikes, 0, 1);   // Säule zeigt den Weg zum nächsten Fressrausch
+    const rushing = Hype.active > 0;
+    if (this.wasRush && !rushing) { this.dizzyT = 1.8; }
+    this.wasRush = rushing;
+    // Wunsch
+    if (this.wish) {
+      const w = this.wish; w.t += dt; w.pop = Math.max(0, w.pop - dt * 4);
+      if (w.done) { w.doneT += dt; if (w.doneT > 1.2) { this.wish = null; this.nextWishAt = t + rand(8, 18); } }
+      else if (w.t >= w.dur) { const [mx, my] = M.mouth(); Game.pops.push({ text: 'Schade!', x: mx - 160, y: my - 200, t: 0, life: 1.2, color: '#ffffff', size: 38, font: 'uiHeavy' }); this.wish = null; this.nextWishAt = t + rand(8, 16); }
+    } else if (t > this.nextWishAt && !this.busy() && !M.sleeping && !(this.event && (this.event.key === 'guess' || this.event.key === 'mega'))) this.newWish();
+    // Glücksrad
+    if (this.wheel) {
+      const W = this.wheel; W.t += dt;
+      const k = clamp(W.t / W.spin, 0, 1); this.wheelA = lerp(W.a0, W.a1, 1 - Math.pow(1 - k, 3.2));
+      const seg = TAU / WHEEL.length, idx = Math.floor(((-this.wheelA % TAU) + TAU + seg / 2) / seg) % WHEEL.length;
+      if (idx !== this._lastSeg && k < 1) { this._lastSeg = idx; if (now() - this.wheelTickAt > 0.05) { this.wheelTickAt = now(); Sound.tick(false); } }
+      if (k >= 1 && !W.applied) { W.applied = true; this.applyReward(WHEEL[W.res].key, null); }
+      if (W.t >= W.spin + W.hold) this.wheel = null;
+    }
+    // Events
+    if (this.event) {
+      const e = this.event; e.t += dt; e.bite = Math.max(0, (e.bite || 0) - dt * 5);
+      if (e.key === 'gold' && Math.random() < dt * 14) FX.spawn({ type: 'star', layer: 2, x: rand(60, 1020), y: -20, vx: rand(-30, 30), vy: rand(160, 320), g: 120, size: rand(8, 13), rot: rand(0, TAU), vr: rand(-4, 4), life: 3.5, color: pick(['#ffd60a', '#ffcc00', '#fff3b0']) });
+      if (e.key === 'chest' && e.opened) e.openT += dt;
+      if (e.t >= e.dur) this.endEvent(true);
+    } else if (t > this.nextEventAt && !this.busy() && !M.sleeping && C.eventsEnabled) this.startEvent(pick(Object.keys(MF_EVENTS)));
+    if (this.banner) { this.banner.t += dt; if (this.banner.t > this.banner.life) this.banner = null; }
+    // Neue Nr. 1 in "dieses Monster"
+    if (now() - this.kingAt > 1) {
+      this.kingAt = now(); let best = null;
+      for (const [id, v] of M.cur) if (!Persist.isMuted(id) && (!best || v.p > best[1].p)) best = [id, v];
+      if (best && best[0] !== this.kingId && best[1].p >= 4) {
+        if (this.kingId) Game.toast(`${best[1].n} ist jetzt die Nr. 1!`, { icon: '🏆', prio: 2, color: '#ffcc00', life: 2.6, u: Users.map.get(best[0]) });
+        this.kingId = best[0];
+      }
+    }
+  },
+  pose() {
+    const M = Monster;
+    if (this.wheel && this.wheel.t < this.wheel.spin) return 'think';
+    if (this.loveT > 0) return 'love';
+    if (this.laughT > 0) return 'laugh';
+    if (this.fullT > 0) return 'full';
+    if (this.dizzyT > 0 && !M.incoming()) return 'dizzy';
+    if (this.danceOn() && !M.incoming() && M.chewT <= 0) return Math.floor(gnow() / 0.35) % 2 ? 'dance' : 'happy';
+    if (this.thinkT > 0 || (this.event && this.event.key === 'guess' && !M.incoming() && M.chewT <= 0)) return 'think';
+    return null;
+  },
+
+  /* ---------- Zeichnen ---------- */
+  goldFood(key, size) {
+    const k = key + '|' + Math.round(size / 8) * 8;
+    let c = this.goldCache.get(k); if (c) return c;
+    const base = MonsterArt.food(key, size); if (!base) return null;
+    c = Mat.cv(base.width, base.height); const g = c.getContext('2d');
+    g.drawImage(base, 0, 0);
+    g.globalCompositeOperation = 'color'; g.globalAlpha = 0.85; g.fillStyle = '#ffbf00'; g.fillRect(0, 0, c.width, c.height);
+    g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.6; const gr = g.createLinearGradient(0, 0, c.width, c.height); gr.addColorStop(0, '#fff6d0'); gr.addColorStop(0.5, '#ffb000'); gr.addColorStop(1, '#fff0a0'); g.fillStyle = gr; g.fillRect(0, 0, c.width, c.height);
+    g.globalAlpha = 1; g.globalCompositeOperation = 'destination-in'; g.drawImage(base, 0, 0);
+    this.goldCache.set(k, c); return c;
+  },
+  drawOutfit(ctx, w, h, pose) {
+    const L = Monster.level, t = gnow(), wear = [];
+    if (L >= 3) wear.push('bowtie');
+    if (L >= 5 && !GLASSES_HIDE.has(pose)) wear.push('sunglasses');
+    const chef = t < this.until.chef;
+    if (chef) wear.push('chefhat');
+    else { if (L >= 8 || Monster.party > 0) wear.push('crown'); if (t < this.until.hat) wear.push('partyhat'); }
+    for (const k of wear) {
+      const im = Assets.get('acc_' + k); if (!im) continue;
+      const O = OUTFITS[k], ih = h * O.h, iw = ih * im.naturalWidth / im.naturalHeight, oy = k === 'sunglasses' && GLASSES_Y[pose] != null ? GLASSES_Y[pose] : O.y;
+      ctx.save(); ctx.translate(-w / 2 + O.x * w, -h + oy * h); ctx.rotate(O.rot);
+      ctx.drawImage(im, -iw / 2, -ih / 2, iw, ih); ctx.restore();
+    }
+  },
+  drawBack(ctx, t) {
+    if (this.goldNow()) { ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.fillStyle = 'rgba(255,200,40,0.55)'; ctx.fillRect(0, 0, 1080, 1920); ctx.restore(); }
+    if (this.danceOn()) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const cols = ['#ff2d55', '#5ac8fa', '#ffcc00', '#af52de', '#34c759'];
+      for (let i = 0; i < 5; i++) {
+        const a = Math.sin(t * 1.6 + i * 1.3) * 0.5, x = 120 + i * 210;
+        ctx.save(); ctx.translate(x, 0); ctx.rotate(a); ctx.globalAlpha = 0.16 + 0.08 * Math.sin(t * 6 + i);
+        const g = ctx.createLinearGradient(0, 0, 0, 1500); g.addColorStop(0, cols[i]); g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(14, 0); ctx.lineTo(150, 1500); ctx.lineTo(-150, 1500); ctx.closePath(); ctx.fill(); ctx.restore();
+      }
+      ctx.restore();
+    }
+  },
+  /* Szene: Mega-Burger, Schatzkiste, Wunsch-Blase, Combo */
+  drawWorld(ctx, t) {
+    const M = Monster, e = this.event, LG = LiquidGlass;
+    if (e && e.key === 'mega' && !e.done) {
+      const im = MonsterArt.food('burger', 260), k = e.hp / e.max, s = (120 + 130 * k) * (1 - e.bite * 0.06), x = M.X, y = Math.max(655, M.GY - M.dispH - s * 0.5 - 30);
+      if (im) { const r = s / Math.max(im.width, im.height); ctx.save(); ctx.translate(x, y); ctx.rotate(Math.sin(t * 3) * 0.05); ctx.drawImage(im, -im.width * r / 2, -im.height * r / 2, im.width * r, im.height * r); ctx.restore(); }
+      LG.bar(ctx, x - 130, y + s * 0.5 + 8, 260, 18, k, '#ffcc00', '#ff6a00', t);
+    }
+    if (e && e.key === 'chest') {
+      const open = e.opened, im = Assets.get(open ? 'chest_open' : 'chest_closed'), x = 850, y = 1180, s = 170, a = open ? clamp(1 - (e.openT - 2) / 0.6, 0, 1) : clamp(e.t / 0.4, 0, 1);
+      if (im && a > 0) {
+        ctx.save(); ctx.globalAlpha = a;
+        if (open) { const gs = 160 + Math.sin(t * 8) * 10; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * 0.7; ctx.drawImage(softBlob('#ffd60a'), x - gs, y - 90 - gs, gs * 2, gs * 2); ctx.restore(); }
+        const wob = open ? 0 : Math.sin(t * (6 + 10 * e.got / e.need)) * 0.04 * (e.got / e.need);
+        const r = s / Math.max(im.naturalWidth, im.naturalHeight); ctx.translate(x, y); ctx.rotate(wob);
+        ctx.drawImage(im, -im.naturalWidth * r / 2, -im.naturalHeight * r, im.naturalWidth * r, im.naturalHeight * r); ctx.rotate(-wob);
+        if (!open) {
+          ctx.lineWidth = 10; ctx.lineCap = 'round'; ctx.strokeStyle = 'rgba(118,118,128,0.35)'; ctx.beginPath(); ctx.arc(0, -s * 0.42, s * 0.62, 0, TAU); ctx.stroke();
+          ctx.strokeStyle = '#ffcc00'; ctx.beginPath(); ctx.arc(0, -s * 0.42, s * 0.62, -Math.PI / 2, -Math.PI / 2 + TAU * clamp(e.got / e.need, 0, 1)); ctx.stroke();
+          LG.text(ctx, `${e.got}/${e.need}`, 0, 28, { size: 30, font: 'uiHeavy', color: '#ffffff', stroke: true, strokeWidth: 6, strokeColor: 'rgba(90,60,0,0.6)', drop: false });
+        }
+        ctx.restore();
+      }
+    }
+    // Wunsch-Blase (links über dem Kopf)
+    const w = this.wish;
+    if (w) {
+      const a = w.done ? clamp(1 - w.doneT / 1.2, 0, 1) : clamp(w.t / 0.3, 0, 1), s = 1 + w.pop * 0.12;
+      const bx = clamp(M.X - M.dispH * 0.62, 170, 800), by = clamp(M.GY - M.hop - M.dispH * 1.02, 690, 1150), r = 78;
+      ctx.save(); ctx.globalAlpha = a;
+      for (const [dx, dy, rr2] of [[44, 74, 14], [70, 104, 9]]) { ctx.beginPath(); ctx.arc(bx + dx, by + dy, rr2, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill(); }
+      ctx.translate(bx, by); ctx.scale(s, s);
+      ctx.save(); ctx.shadowColor = 'rgba(25,35,70,0.25)'; ctx.shadowBlur = 16; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill(); ctx.restore();
+      const p = clamp(w.got / w.need, 0, 1), tl = clamp(1 - w.t / w.dur, 0, 1);
+      ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.strokeStyle = 'rgba(118,118,128,0.2)'; ctx.beginPath(); ctx.arc(0, 0, r - 8, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = w.done ? '#34c759' : '#ff9500'; ctx.beginPath(); ctx.arc(0, 0, r - 8, -Math.PI / 2, -Math.PI / 2 + TAU * p); ctx.stroke();
+      ctx.lineWidth = 3; ctx.strokeStyle = tl < 0.25 ? '#ff3b30' : 'rgba(60,60,67,0.35)'; ctx.beginPath(); ctx.arc(0, 0, r + 4, -Math.PI / 2, -Math.PI / 2 + TAU * tl); ctx.stroke();
+      const im = MonsterArt.food(w.food, 70); if (im) ctx.drawImage(im, -im.width / 2, -im.height / 2 - 14);
+      LG.text(ctx, w.done ? '✓' : `${w.got}/${w.need}`, 0, 40, { size: 24, font: 'uiHeavy' });
+      ctx.restore();
+    }
+    // Combo-Zähler (links neben dem Bauch)
+    const c = this.combo, age = gnow() - c.at;
+    if (c.n >= 3 && age < 1.8) {
+      const a = clamp((1.8 - age) / 0.4, 0, 1), s = 1 + c.pop * 0.25, x = clamp(M.X - M.dispH * 0.66, 190, 800), y = M.GY - M.dispH * 0.34;
+      const col = c.n >= 100 ? '#bf5af2' : c.n >= 50 ? '#ff2d55' : c.n >= 25 ? '#ff9500' : c.n >= 10 ? '#ffd60a' : '#ffffff';
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(x, y); ctx.rotate(-0.08); ctx.scale(s, s);
+      LG.text(ctx, 'COMBO', 0, -34, { size: 24, font: 'uiHeavy', color: '#ffffff', stroke: true, strokeWidth: 6, strokeColor: 'rgba(20,40,30,0.55)', drop: false });
+      LG.text(ctx, `×${c.n}`, 0, 8, { size: 64 + Math.min(c.n, 100) * 0.25, font: 'uiHeavy', color: col, stroke: true, strokeWidth: 9, strokeColor: 'rgba(20,40,30,0.6)', drop: false });
+      ctx.restore();
+    }
+  },
+  /* HUD: Event-Kopfzeile, Ansage-Karte, Glücksrad */
+  drawHud(ctx, t) {
+    const LG = LiquidGlass, e = this.event, cx = CONFIG.layout.centerX;
+    if (e) {
+      const D = MF_EVENTS[e.key], left = Math.max(0, e.dur - e.t), [x, y, w, h] = MonsterView.L.cta;
+      LG.draw(ctx, x, y, w, h, h / 2, { tint: 'rgba(255,255,255,0.55)' });
+      ctx.beginPath(); rr(ctx, x + 10, y + 10, 230, h - 20, (h - 20) / 2); ctx.fillStyle = D.col; ctx.fill();
+      LG.text(ctx, D.title, x + 125, y + h / 2 + 1, { size: 24, font: 'uiHeavy', color: '#ffffff', maxWidth: 210 });
+      LG.text(ctx, D.sub(e), x + 262, y + h / 2 + 1, { size: 28, font: 'uiHeavy', align: 'left', maxWidth: w - 262 - 110 });
+      LG.text(ctx, `${Math.ceil(left)} s`, x + w - 30, y + h / 2 + 1, { size: 30, font: 'uiHeavy', align: 'right', color: left < 6 ? '#ff3b30' : LG.INK });
+    }
+    const b = this.banner;
+    if (b) {
+      const D = MF_EVENTS[b.key], inK = easeOutBack(clamp(b.t / 0.35, 0, 1)), out = clamp((b.life - b.t) / 0.35, 0, 1), W = 820, H = 190, x = cx - W / 2, y = 600;
+      ctx.save(); ctx.globalAlpha = out; ctx.translate(cx, y + H / 2); ctx.scale(inK, inK); ctx.translate(-cx, -(y + H / 2));
+      LG.draw(ctx, x, y, W, H, 40, { tint: 'rgba(255,255,255,0.55)' });
+      LG.text(ctx, 'EVENT', cx, y + 40, { size: 20, color: LG.SUB });
+      LG.text(ctx, D.title, cx, y + 92, { size: 64, font: 'uiHeavy', color: D.col, maxWidth: W - 60 });
+      LG.text(ctx, b.sub, cx, y + 148, { size: 30, font: 'uiHeavy', maxWidth: W - 60 });
+      ctx.restore();
+    }
+    const W2 = this.wheel;
+    if (W2) {
+      const R = 150, x = 770, y = 800, inK = easeOutBack(clamp(W2.t / 0.35, 0, 1)), out = clamp((W2.spin + W2.hold - W2.t) / 0.35, 0, 1), seg = TAU / WHEEL.length;
+      ctx.save(); ctx.globalAlpha = out; ctx.translate(x, y); ctx.scale(inK, inK);
+      ctx.save(); ctx.shadowColor = 'rgba(25,35,70,0.3)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 10; ctx.beginPath(); ctx.arc(0, 0, R + 16, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill(); ctx.restore();
+      ctx.save(); ctx.rotate(this.wheelA - Math.PI / 2);
+      WHEEL.forEach((S, i) => {
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, i * seg - seg / 2, i * seg + seg / 2); ctx.closePath(); ctx.fillStyle = S.col; ctx.fill();
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
+        ctx.save(); ctx.rotate(i * seg); ctx.translate(R * 0.62, 0); ctx.rotate(Math.PI / 2);
+        LG.text(ctx, S.label, 0, 0, { size: 21, font: 'uiHeavy', color: '#ffffff', stroke: true, strokeWidth: 4, strokeColor: 'rgba(0,0,0,0.35)', drop: false, maxWidth: 110 });
+        ctx.restore();
+      });
+      ctx.restore();
+      const gl = ctx.createRadialGradient(-R * 0.3, -R * 0.4, 10, 0, 0, R); gl.addColorStop(0, 'rgba(255,255,255,0.35)'); gl.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fillStyle = gl; ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, 34, 0, TAU); ctx.fillStyle = '#ffffff'; ctx.fill(); LG.text(ctx, '🎡', 0, 2, { size: 30 });
+      ctx.beginPath(); ctx.moveTo(-20, -R - 26); ctx.lineTo(20, -R - 26); ctx.lineTo(0, -R + 10); ctx.closePath(); ctx.fillStyle = '#1d1d1f'; ctx.fill();
+      ctx.restore();
+    }
+  },
+};
+
+/* ==========================================================================
    15. Boot – Layout, Eingaben, Spielschleife
    ========================================================================== */
 const canvas = document.getElementById('stage');
@@ -6033,7 +6436,7 @@ function boot() {
   Net.connect();
   setInterval(() => { Panel.update(); PanelLink.post({ kind: 'status', status: Host.status() }); }, 500);
   // Debug-Zugriff für Tests in der Konsole
-  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass, Bots, Race, RaceView, Monster, MonsterView };
+  window.DinoEi = { Game, World, Net, TestSim, CONFIG, HUD, Persist, Users, Board, Coll, StatsLog, Host, FX, Sound, Assets, DinoArt, Glass, Bots, Race, RaceView, Monster, MonsterView, MonsterFun };
   Loop.last = performance.now(); Loop.fpsAt = Loop.last;
   requestAnimationFrame(frame);
 }

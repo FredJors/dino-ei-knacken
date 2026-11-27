@@ -37,11 +37,13 @@ SPRITES = {
         'trex', 'triceratops', 'stegosaurus', 'brachiosaurus', 'velociraptor',
         'ankylosaurus', 'parasaurolophus', 'spinosaurus', 'dilophosaurus', 'pteranodon']},
     **{f'food_{k}': {'max': 260, 'holes': False} for k in ['candy', 'cookie', 'apple', 'donut', 'burger', 'pizza', 'icecream', 'cake']},
+    **{f'acc_{k}': {'max': 420, 'holes': True} for k in ['partyhat', 'sunglasses', 'crown', 'bowtie', 'chefhat']},
+    'chest_closed': {'max': 420, 'holes': False}, 'chest_open': {'max': 420, 'holes': False},
 }
 
 # Gruppen: alle Bilder bekommen DENSELBEN Zuschnitt (Vereinigung aller Umrisse) → Posen springen beim Wechsel nicht
 GROUPS = {
-    'monster': {'h': 760, 'names': ['idle', 'blink', 'open', 'chew', 'chew2', 'yum', 'happy', 'wow', 'hungry', 'sleep', 'burp', 'crouch', 'grow', 'dance']},
+    'monster': {'h': 760, 'names': ['idle', 'blink', 'open', 'chew', 'chew2', 'yum', 'happy', 'wow', 'hungry', 'sleep', 'burp', 'crouch', 'grow', 'dance', 'love', 'dizzy', 'full', 'laugh', 'think']},
 }
 
 

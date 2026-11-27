@@ -209,7 +209,14 @@ freut sich – und wächst Level für Level (Ducken → Wachsen mit Funkeln → 
 | Follow / Teilen | Burger / Pizza + Dank-Einblendung |
 | Geschenk | Kuchen, gedeckelt – keine Aufforderung, das Spiel läuft komplett ohne |
 
-- **Fressrausch:** Die Hype-Säule füllt sich durch Aktivität → 12 s doppeltes Wachstum, Essen regnet vom Himmel.
+- **Jeder Like = ein Snack** (bis 15 sichtbare Snacks pro Like-Paket, der Rest zählt trotzdem).
+- **Fressrausch alle 50 Likes:** Die Säule links zeigt den Weg dorthin; 12 s doppeltes Wachstum, Essen regnet vom Himmel.
+  Kommen während des Rauschs wieder 50 Likes, verlängert er sich um 8 s (Panel: „Fressrausch alle … Likes“).
+- **Dauer-Belohnungen:** Combo-Zähler (SUPER/MEGA/ULTRA bei 10/25/50/100, Kau-Ton steigt mit), kritischer Biss ×3 (5 %),
+  goldenes Essen (2 %, großer Wachstums-Schub + Herzaugen), Wunsch-Blase („🍩 7/15“ → Wunsch erfüllt!),
+  Einblendung bei neuer Nr. 1, Glücksrad nach jedem Level (Party-Hut, Goldregen, Wachstum, Tanzen, Fressrausch, Kochmütze, Konfetti, Liebe).
+- **Outfits:** Fliege ab Level 3, Sonnenbrille ab Level 5, Krone ab Level 8; Party-Hut/Kochmütze durch Glücksrad und Events.
+- **Events alle ~2,5–3,5 min** (oder per Panel/Taste E): Goldene Minute, Wunsch-Rush, Mega-Burger, Schatzkiste, Tanz-Party, Rate-Runde.
 - **Stimmungen:** Kommt lange nichts, wird es hungrig („Ich hab Hunger …“) und schläft schließlich ein (Zzz) –
   der nächste Like weckt es. Nach großen Mahlzeiten: Rülpser.
 - **Level-Tempo** passt sich der Aktivität an (≈ 2,5 min pro Level, Panel: „Sekunden pro Level“).
